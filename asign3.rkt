@@ -9,7 +9,7 @@
 ; - Binop (+ - * /)
 ; - Functions and ids
 
-; Abstract Syntax Tree definitions
+; ***** Abstract Syntax *****
 (struct NumC([n : Real]) #:transparent)
 (struct BinopC([op : Symbol] [l : ExprC] [r : ExprC]) #:transparent)
 ; ifleq0? x : y else: z
@@ -38,6 +38,7 @@
 (define (parse-fundef [s : Sexp]) : FundefC
   (match s
     ; destructure fundef, create a FunDefC, parse body
+    ; should we check name against taken id's here or in parse-prog??
     [(list 'fun (list name (list arg)) body) (FundefC name arg (parse body))]
     ; better error check here?
     [other (error 'parse-fundef "PAIG: expected legal function definition, got ~e" other)]))
@@ -57,6 +58,7 @@
 
 ; ***** Interpreter *****
 
+; Combine parsing and evaluation to run program
 (: top-interp (Sexp -> Real))
 (define (top-interp fun-sexps)
   (interp-fns (parse-prog fun-sexps)))
