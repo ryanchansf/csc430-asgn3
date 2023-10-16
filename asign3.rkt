@@ -45,6 +45,7 @@
     [(equal? s 'ifleq0?) (error 'parse-id "PAIG: expected legal id, got ~e" s)]
     [(equal? s ':) (error 'parse-id "PAIG: expected legal id, got ~e" s)]
     [(equal? s 'else:) (error 'parse-id "PAIG: expected legal id, got ~e" s)]
+    ; come back to this
     [else (IdC (cast s Symbol))]))
 
 ; given a PAIG function parse into a FundefC
@@ -96,7 +97,28 @@
     ; add error checking here?
     [(Cond0C x y z) (cond
       [(<= (interp x funs) 0) (interp y funs)]
-      [else (interp z funs)])]))
+      [else (interp z funs)])]
+    [(AppC f arg) (local ([define fd (find-fun f funs)]) 
+                    (interp (subst (interp arg funs) (FundefC-arg fd) (FundefC-body fd)) funs))]))
+
+; substitute ExprC into given function body
+(define (subst [arg : Real] [name : IdC] [body : ExprC]) : ExprC
+  (match body
+    [(NumC n) body]
+    [(IdC s) (cond
+               [(symbol=? s (IdC-s name)) (NumC arg)]
+               [else body])]
+    [(AppC f a) (AppC f (subst arg name a))]
+    [(BinopC s l r) (BinopC s (subst arg name l)
+                            (subst arg name r))]))
+
+; given function name, find corresponding FundefC
+(define (find-fun [name : IdC] [funs : (Listof FundefC)]) : FundefC
+  (match funs
+    ['() (error 'find-fun "PAIG: expected defined function, got ~e" name)]
+    [(cons (FundefC n arg body) r) (cond
+      [(equal? n name) (FundefC name arg body)]
+      [else (find-fun name r)])]))
 
 ; match binary operator to meaning
 ; from asgn spec, should this return the function ex: (+)?
@@ -115,7 +137,10 @@
 ; - check for poorly created functions
 
 
-
+(check-equal? (interp-fns
+               (parse-prog '{{fun {f (x)} {+ x 14}}
+                             {fun {main (0)} {f (2)}}}))
+              16)
 
 ; interp test cases
 ;(check-equal? (interp (parse '{+ 1 2})) 3)
