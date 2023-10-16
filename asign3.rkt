@@ -27,11 +27,15 @@
 (define (parse [s : Sexp]) : ExprC
   (match s
     [(? real? n) (NumC n)]
-    ; function applications
+    ; parse function applications
     [(list name (list arg)) (AppC (parse-id name) (parse arg))]
+    ; parse symbols to IdC
+    [(? symbol? s) (parse-id s)]
+    ; parse binary operations
     [(list (? symbol? s) l r) (BinopC s (parse l) (parse r))]
     ; parse conditional statements
     [(list 'ifleq0? x ': y 'else: z) (Cond0C (parse x) (parse y) (parse z))]
+    ; catch illegal expressions
     [other (error 'parse "PAIG: expected legal expression, got ~e" other)]))
 
 ; check against taken ids and parse symbol
@@ -53,6 +57,9 @@
   (match s
     ; destructure fundef, create a FunDefC, parse body
     ; should we check name against taken id's here or in parse-prog??
+    [(list 'fun (list 'main (list arg)) body) (cond
+      [(equal? arg 'init) (FundefC (IdC 'main) (IdC 'init) (parse body))]
+      [else (error 'parse-fundef "PAIG: expected \"init\" as argument to main, got ~e" arg)])]
     [(list 'fun (list name (list arg)) body) (FundefC (parse-id name) (parse-id arg) (parse body))]
     ; better error check here?
     [other (error 'parse-fundef "PAIG: expected legal function definition, got ~e" other)]))
@@ -79,13 +86,11 @@
 
 ; interprets the function named main from function definitions
 (define (interp-fns [funs : (Listof FundefC)]) : Real
-  (match funs
-    ; no main function
-    ['() (error 'interp-fns "PAIG: couldn't find \"main\" function")]
-    ; found main function
-    [(cons (FundefC 'main arg body) r) (interp body funs)]
-    ; check next function in list
-    [(cons f r) (interp-fns r)]))
+  ; evaluate main function by finding main
+  ;(interp (FundefC-body (find-fun (IdC 'main) funs)) funs))
+  ; evaluate program by applying main function to argument 0
+  (interp (AppC (IdC 'main) (NumC 0)) funs))
+
 
 ; recursively interpret ExprCs
 (define (interp [e : ExprC] [funs : (Listof FundefC)]) : Real
@@ -110,12 +115,13 @@
                [else body])]
     [(AppC f a) (AppC f (subst arg name a))]
     [(BinopC s l r) (BinopC s (subst arg name l)
-                            (subst arg name r))]))
+                            (subst arg name r))]
+    [(Cond0C test then else) (Cond0C (subst arg name test) (subst arg name then) (subst arg name else))]))
 
 ; given function name, find corresponding FundefC
 (define (find-fun [name : IdC] [funs : (Listof FundefC)]) : FundefC
   (match funs
-    ['() (error 'find-fun "PAIG: expected defined function, got ~e" name)]
+    ['() (error 'find-fun "PAIG: expected defined function, got ~e" (IdC-s name))]
     [(cons (FundefC n arg body) r) (cond
       [(equal? n name) (FundefC name arg body)]
       [else (find-fun name r)])]))
@@ -132,15 +138,20 @@
 
 
 ; errors to check for
-; - don't let other functions call main
+; - don't let other functions call main?
 ; - check for taken ids
 ; - check for poorly created functions
 
 
-(check-equal? (interp-fns
-               (parse-prog '{{fun {f (x)} {+ x 14}}
-                             {fun {main (0)} {f (2)}}}))
-              16)
+(check-equal? (interp-fns (parse-prog '{{fun {f (x)} {+ x 14}}
+                             {fun {main (init)} {f (2)}}}))16)
+(check-equal? (interp-fns (parse-prog '{{fun {f (x)} {g ({/ x 2})}}
+                             {fun {main (init)} {f (2)}}
+                             {fun {g (x)} {* {/ 6 x} {- x 4}}}}))-18)
+(check-equal? (top-interp '{{fun {f (x)} {ifleq0? x : x else: {- x 1}}}
+                             {fun {main (init)} {f (-2)}}}) -2)
+(check-equal? (top-interp '{{fun {f (x)} {ifleq0? x : x else: {- x 1}}}
+                             {fun {main (init)} {f (2)}}}) 1) 
 
 ; interp test cases
 ;(check-equal? (interp (parse '{+ 1 2})) 3)
