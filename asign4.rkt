@@ -74,25 +74,17 @@
   (match s
     ; ensure main has no arguments
     [(list 'fun (list 'main args) body) (cond
-                                                [(equal? args '()) (FundefC (IdC 'main) '() (parse body))]
-                                                [else (error 'parse-fundef "PAIG: expected no arguments to main, got ~e" args)])]
+                                          [(equal? args '()) (FundefC (IdC 'main) '() (parse body))]
+                                          [else (error 'parse-fundef
+                                                       "PAIG: expected no arguments to main, got ~e" args)])]
     ; parse PAIG function definition
     [(list 'fun (list name (list (? symbol? args) ...)) body)
      (cond
-       [(no-dups (cast args (Listof Symbol))) (FundefC (parse-id name) (map parse-id (cast args (Listof Symbol))) (parse body))]
+       [(equal? #f (check-duplicates (cast args (Listof Symbol))))
+        (FundefC (parse-id name) (map parse-id (cast args (Listof Symbol))) (parse body))]
        [else (error 'parse-fundef "PAIG: no duplicate arguments, got ~e" args)])]
     ; catch illegal function definitions
     [other (error 'parse-fundef "PAIG: expected legal function definition, got ~e" other)]))
-
-; given a list of args, enforce no duplicate args
-(define (no-dups [args : (Listof Symbol)]) : Boolean
-  (match args
-    ['() #t]
-    [(cons f '()) #t]
-    [(cons a (cons b c)) (cond
-                           [(equal? #f (member b (cons a c))) (no-dups (cons b c))]
-                           [else #f])]))
-
 
 ; given a list of PAIG functions (a PAIG program), parse into a list of FundefC
 (define (parse-prog [s : Sexp]) : (Listof FundefC)
@@ -119,6 +111,8 @@
 (define (interp [e : ExprC] [funs : (Listof FundefC)]) : Real
   (match e
     [(NumC n) n]
+    ; any Id not substituted is unbound
+    [(IdC s) (error 'interp "PAIG: unbound identifier: ~e" s)] 
     ; use binop-lookup to assign meaning to binop
     [(BinopC s l r) (binop-lookup (BinopC s l r) funs)]
     ; check if x <= 0
@@ -130,9 +124,13 @@
                      ; enforce correct number of arguments
                      (cond
                        ; fold argument values into body with subst
-                       [(equal? (length vals) (length (FundefC-args fd))) (interp (foldl (λ ([val : ExprC] [arg : IdC] [body : ExprC]) : ExprC (subst (interp val funs) arg body)) (FundefC-body fd) vals (FundefC-args fd)) funs)]
-                       [else (error 'interp "Paig: Incorrect number for arguments for function: \"~e\"" (IdC-s (FundefC-name fd)))]))]
-    [other (error 'interp "PAIG: unreachable")]))
+                       [(equal? (length vals) (length (FundefC-args fd)))
+                        (interp (foldl (λ ([val : ExprC] [arg : IdC] [body : ExprC]) : ExprC
+                                         (subst (interp val funs) arg body))
+                                       (FundefC-body fd) vals (FundefC-args fd)) funs)]
+                       [else (error
+                              'interp "PAIG: Incorrect number for arguments for function: \"~e\""
+                              (IdC-s (FundefC-name fd)))]))]))
 
 ; given the a function's argument, name, and body, substitute ExprC into given function body
 (define (subst [arg : Real] [name : IdC] [body : ExprC]) : ExprC
@@ -140,7 +138,7 @@
     [(NumC n) body]
     [(IdC s) (cond
                [(symbol=? s (IdC-s name)) (NumC arg)]
-               [else (error 'subst "PAIG: \"~e\" is an unbound identifier" s)])]
+               [else (IdC s)])]
     [(AppC f args) (AppC f (map (λ ([a : ExprC]) : ExprC (subst arg name a)) args))]
     [(BinopC s l r) (BinopC s (subst arg name l)
                             (subst arg name r))]
@@ -152,8 +150,8 @@
   (match funs
     ['() (error 'find-fun "PAIG: expected defined function, got ~e" (IdC-s name))]
     [(cons (FundefC n args body) r) (cond
-                                     [(equal? n name) (FundefC name args body)]
-                                     [else (find-fun name r)])]))
+                                      [(equal? n name) (FundefC name args body)]
+                                      [else (find-fun name r)])]))
 
 ; given a valid BinopC and a list of FundefCs, match BinopC's binary operator to its meaning and evaluate
 (define (binop-lookup [b : BinopC] [funs : (Listof FundefC)]) : Real
@@ -171,13 +169,19 @@
 
 ; round numbers to the nearest integer
 (check-equal? (top-interp '{{fun {main ()} {round (5.5)}}
-                            {fun {round (num)} {ifleq0? num : {+ 1 {* -1 {round-neg (num)}}} else: {- {round-pos (num)} 1}}}
-                            {fun {round-pos (num)} {ifleq0? num : 0 else: {+ 1 {round-pos ({- num 1})}}}}
-                            {fun {round-neg (num)} {ifleq0? num : {+  1 {round-neg ({+ num 1})}} else: 0}}}) 5)
+                            {fun {round (num)} {ifleq0? num : {+ 1 {* -1 {round-neg (num)}}}
+                                                        else: {- {round-pos (num)} 1}}}
+                            {fun {round-pos (num)} {ifleq0? num : 0
+                                                            else: {+ 1 {round-pos({- num 1})}}}}
+                            {fun {round-neg (num)} {ifleq0? num : {+  1 {round-neg ({+ num 1})}}
+                                                            else: 0}}}) 5)
 (check-equal? (top-interp '{{fun {main ()} {round (-5.5)}}
-                            {fun {round (num)} {ifleq0? num : {+ 1 {* -1 {round-neg (num)}}} else: {- {round-pos (num)} 1}}}
-                            {fun {round-pos (num)} {ifleq0? num : 0 else: {+ 1 {round-pos ({- num 1})}}}}
-                            {fun {round-neg (num)} {ifleq0? num : {+  1 {round-neg ({+ num 1})}} else: 0}}}) -5)
+                            {fun {round (num)} {ifleq0? num : {+ 1 {* -1 {round-neg (num)}}}
+                                                        else: {- {round-pos (num)} 1}}}
+                            {fun {round-pos (num)} {ifleq0? num : 0 else:
+                                                            {+ 1 {round-pos ({- num 1})}}}}
+                            {fun {round-neg (num)} {ifleq0? num : {+  1 {round-neg ({+ num 1})}}
+                                                            else: 0}}}) -5)
 
 ; general functionality
 (check-equal? (interp-fns (parse-prog '{{fun {f (x)} {+ x 14}}
@@ -207,6 +211,18 @@
 (check-= (top-interp '{{fun {g (x)} {ifleq0? x : {/ x 2} else: {* x 2}}}
                        {fun {f (x)} {ifleq0? x : {g ({+ x 1})} else: {g ({- x 1})}}}
                        {fun {main ()} {f (2)}}}) 2 0.001)
+(check-equal? (interp-fns (parse-prog '{{fun {f (x y)} {+ x y}}
+                                        {fun {main ()} {f (2 14)}}})) 16)
+(check-equal? (interp-fns (parse-prog '{{fun {f (x)} {+ x 14}}
+                                        {fun {main ()} {f ({g (3)})}}
+                                        {fun {g (y)} {* 3 y}}})) 23)
+(check-equal? (interp-fns (parse-prog '{{fun {f (x y z)} {+ x {+ y z}}}
+                                        {fun {main ()} {f ({g (3 4 5)} {g (3 4 5)} {g (3 4 5)})}}
+                                        {fun {g (x y z)} {* x {* y z}}}})) 180)
+(check-equal? (interp-fns (parse-prog '{{fun {f (x y)} 4}
+                                        {fun {main ()} {* 4 {f (2 14)}}}})) 16)
+(check-equal? (interp-fns (parse-prog '{{fun {f ()} 4}
+                                        {fun {main ()} {* 4 {f ()}}}})) 16)
 
 ; error checking functionality
 (check-exn (regexp (regexp-quote "check-binop"))
@@ -215,7 +231,7 @@
 (check-exn (regexp (regexp-quote "find-fun"))
            (lambda () (interp-fns (parse-prog '{{fun {f (x)} {+ x 14}}
                                                 {fun {main ()} {g (2)}}}))))
-(check-exn (regexp (regexp-quote "subst"))
+(check-exn (regexp (regexp-quote "interp"))
            (lambda () (interp-fns (parse-prog '{{fun {f (x)} {+ x y}}
                                                 {fun {main ()} {f (2)}}}))))
 (check-exn (regexp (regexp-quote "parse-prog"))
@@ -263,3 +279,18 @@
 (check-exn (regexp (regexp-quote "interp"))
            (lambda () (interp-fns (parse-prog '{{fun {f (x y)} {+ x 14}}
                                                 {fun {main ()} {f (2)}}}))))
+(check-exn (regexp (regexp-quote "parse-fundef"))
+           (lambda () (interp-fns (parse-prog '{{fun {f (x x)} {+ x x}}
+                                                {fun {main ()} {f (2 2)}}}))))
+(check-exn (regexp (regexp-quote "interp"))
+           (lambda () (interp-fns (parse-prog '{{fun {f (x)} {+ x 2}}
+                                                {fun {main ()} {f (2 2)}}}))))
+(check-exn (regexp (regexp-quote "interp"))
+           (lambda () (interp-fns (parse-prog '{{fun {f ()} {+ x 2}}
+                                                {fun {main ()} {f (2)}}}))))
+(check-exn (regexp (regexp-quote "parse-fundef"))
+           (lambda () (interp-fns (parse-prog '{{fun {f (x)} {+ x 2}}
+                                                {fun {main (x)} {f (2)}}}))))
+
+
+
