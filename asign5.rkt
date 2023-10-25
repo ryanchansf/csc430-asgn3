@@ -4,25 +4,74 @@
 ; Full project implemented
 
 
+; new features
+; - change abstract syntax
+; - update parser and interpreter to handle new abstract syntax
+; - add environments
+; - serialize
+; - booleans
+; - closures (straight out of book)
+; - desugar with to blam
+; - user error raising
+; - built-ins (equal, <=, *, -, etc)
+
+; - why {Expr Expr ...} not {BlamC Expr ...}
+; - why new env with r as mt-env instead of current env
+
+
+
 ; ***** Abstract Syntax *****
 
-(define-type ExprC (U NumC BinopC Cond0C IdC AppC))
+(define-type ExprC (U NumC IdC StrC CondC BlamC AppC))
 
 ; EXPR
 ; num
 (struct NumC([n : Real]) #:transparent)
-; {op EXPR EXPR}
-(struct BinopC([op : Symbol] [l : ExprC] [r : ExprC]) #:transparent)
-; {ifleq0? EXPR : EXPR else: EXPR}
-(struct Cond0C([test : ExprC] [then : ExprC] [else : ExprC]) #:transparent)
+
 ; id
 (struct IdC([s : Symbol]) #:transparent)
-; {id {EXPR ...}}
-(struct AppC([fun : IdC] [args : (Listof ExprC)]) #:transparent)
 
-; DEFN
-; {fun {id (id ...)} EXPR}
-(struct FundefC([name : IdC] [args : (Listof IdC)] [body : ExprC]) #:transparent)
+; string
+(struct StrC([s : String]) #:transparent)
+
+; {Expr ? Expr else: Expr} conditionals
+(struct CondC([if : ExprC] [then : ExprC] [else : ExprC]) #:transparent)
+
+; {with {[Expr as id] ...} : Expr} local variables
+; no abstract syntax, desugared into function application in parser
+
+; {blam {id ...} Expr} anonymous functions
+(struct BlamC([args : (Listof IdC)] [body : ExprC]) #:transparent)
+
+; {Expr Expr ...} function applications
+(struct AppC([f : ExprC] [args : (Listof ExprC)]) #:transparent)
+
+
+; ENVIRONMENTS
+(struct Binding([name : Symbol] [val : Value]) #:transparent)
+
+(define-type Env (Listof Binding))
+(define mt-env '())
+(define extend-env cons)
+
+
+
+(struct BoolV([val : Boolean]) #:transparent)
+(struct NumV([val : Real]) #:transparent)
+(struct StrV([val : String]) #:transparent)
+(struct CloV([arg : Symbol] [body : ExprC] [env : Env]) #:transparent)
+(struct PrimV([val : "todo"]) #:transparent)
+
+
+(define-type Value (U NumV StrV BoolV CloV PrimV))
+
+(define top-env (cons (Binding 'true (BoolV #t))
+                      (cons (Binding 'false (BoolV #f))
+                            (cons (Binding '+ (PrimV +))
+                                  (cons (Binding 1 2)
+                                        (cons (Binding 1 2)
+                                              (cons (Binding 1 2)
+                                                    (cons (Binding 1 2) '()))))))))
 
 
 ; ***** Parser *****
@@ -47,14 +96,11 @@
 (define (parse-id [s : Sexp]) : IdC
   (cond
     ; check against taken ids
-    [(or (equal? s '+)
-         (equal? s '-)
-         (equal? s '*) 
-         (equal? s '/)
-         (equal? s 'fun)
-         (equal? s 'ifleq0?) 
-         (equal? s ':) 
-         (equal? s 'else:)) (error 'parse-id "PAIG: expected legal id, got ~e" s)]
+    [(or (equal? s '?)
+         (equal? s 'else:)
+         (equal? s 'with) 
+         (equal? s 'as)
+         (equal? s 'blam)) (error 'parse-id "PAIG: expected legal id, got ~e" s)]
     ; legal id
     [(symbol? s) (IdC s)]
     ; catch illegal ids
@@ -108,11 +154,11 @@
   (interp (AppC (IdC 'main) '()) funs))
 
 ; given an ExprC and list of FundefCs, recursively evaluate ExprCs to resolve applications
-(define (interp [e : ExprC] [funs : (Listof FundefC)]) : Real
+(define (interp [e : ExprC] [env : Env]) : Value
   (match e
     [(NumC n) n]
     ; any Id not substituted is unbound
-    [(IdC s) (error 'interp "PAIG: unbound identifier: ~e" s)] 
+    [(IdC s) (lookup s env)] 
     ; use binop-lookup to assign meaning to binop
     [(BinopC s l r) (binop-lookup (BinopC s l r) funs)]
     ; check if x <= 0
@@ -120,38 +166,21 @@
                       [(<= (interp x funs) 0) (interp y funs)]
                       [else (interp z funs)])]
     ; find function, eagerly evaluate arguments, then evaluate body
-    [(AppC f vals) (local ([define fd (find-fun f funs)])
-                     ; enforce correct number of arguments
-                     (cond
-                       ; fold argument values into body with subst
-                       [(equal? (length vals) (length (FundefC-args fd)))
-                        (interp (foldl (λ ([val : ExprC] [arg : IdC] [body : ExprC]) : ExprC
-                                         (subst (interp val funs) arg body))
-                                       (FundefC-body fd) vals (FundefC-args fd)) funs)]
-                       [else (error
+    [(AppC f vals) (cond
+                     [(equal? (length vals) (length (BlamC-args f))) (interp f
+                           (extend-env (map (λ (arg val) (Binding arg (interp val env))) (BlamC-args f) vals) mt-env))]
+                     [else (error
                               'interp "PAIG: Incorrect number for arguments for function: \"~e\""
-                              (IdC-s (FundefC-name fd)))]))]))
+                              f)])]))
 
-; given the a function's argument, name, and body, substitute ExprC into given function body
-(define (subst [arg : Real] [name : IdC] [body : ExprC]) : ExprC
-  (match body
-    [(NumC n) body]
-    [(IdC s) (cond
-               [(symbol=? s (IdC-s name)) (NumC arg)]
-               [else (IdC s)])]
-    [(AppC f args) (AppC f (map (λ ([a : ExprC]) : ExprC (subst arg name a)) args))]
-    [(BinopC s l r) (BinopC s (subst arg name l)
-                            (subst arg name r))]
-    [(Cond0C test then else) (Cond0C (subst arg name test) (subst arg name then) (subst arg name else))]))
+; lookup binding in environment
+(define (lookup [s : IdC] [env : Env]) : Value
+  (match env
+    ['() (error 'lookup "PAIG: name not found: ~e" s)]
+    [(cons (Binding name val) r) (cond
+                                   [(symbol=? s name) val]
+                                   [else (lookup s r)])]))
 
-
-; given function name, find corresponding FundefC
-(define (find-fun [name : IdC] [funs : (Listof FundefC)]) : FundefC
-  (match funs
-    ['() (error 'find-fun "PAIG: expected defined function, got ~e" (IdC-s name))]
-    [(cons (FundefC n args body) r) (cond
-                                      [(equal? n name) (FundefC name args body)]
-                                      [else (find-fun name r)])]))
 
 ; given a valid BinopC and a list of FundefCs, match BinopC's binary operator to its meaning and evaluate
 (define (binop-lookup [b : BinopC] [funs : (Listof FundefC)]) : Real
@@ -163,134 +192,5 @@
                        (cond
                          [(equal? 0 divisor) (error 'binop-lookup "PAIG: cannot divide by 0")]
                          [else (/ (interp l funs) divisor)]))]))
-
-
-; ***** Test Cases *****
-
-; round numbers to the nearest integer
-(check-equal? (top-interp '{{fun {main ()} {round (5.5)}}
-                            {fun {round (num)} {ifleq0? num : {+ 1 {* -1 {round-neg (num)}}}
-                                                        else: {- {round-pos (num)} 1}}}
-                            {fun {round-pos (num)} {ifleq0? num : 0
-                                                            else: {+ 1 {round-pos({- num 1})}}}}
-                            {fun {round-neg (num)} {ifleq0? num : {+  1 {round-neg ({+ num 1})}}
-                                                            else: 0}}}) 5)
-(check-equal? (top-interp '{{fun {main ()} {round (-5.5)}}
-                            {fun {round (num)} {ifleq0? num : {+ 1 {* -1 {round-neg (num)}}}
-                                                        else: {- {round-pos (num)} 1}}}
-                            {fun {round-pos (num)} {ifleq0? num : 0 else:
-                                                            {+ 1 {round-pos ({- num 1})}}}}
-                            {fun {round-neg (num)} {ifleq0? num : {+  1 {round-neg ({+ num 1})}}
-                                                            else: 0}}}) -5)
-
-; general functionality
-(check-equal? (interp-fns (parse-prog '{{fun {f (x)} {+ x 14}}
-                                        {fun {main ()} {f (2)}}})) 16)
-(check-equal? (interp-fns (parse-prog '{{fun {f (x)} {g ({/ x 2})}}
-                                        {fun {main ()} {f (2)}}
-                                        {fun {g (x)} {* {/ 6 x} {- x 4}}}})) -18)
-(check-equal? (top-interp '{{fun {f (x)} {ifleq0? x : x else: {- x 1}}}
-                            {fun {main ()} {f (-2)}}}) -2)
-(check-equal? (top-interp '{{fun {f (x)} {ifleq0? x : x else: {- x 1}}}
-                            {fun {main ()} {f (2)}}}) 1)
-(check-equal? (interp-fns (parse-prog '{{fun {main ()} {* {f (5)} {g ({+ 1 2})}}}
-                                        {fun {f (x)} {ifleq0? x : 1 else: {f ({- x 1})}}}
-                                        {fun {g (z)} {* z {* z z}}}})) 27)
-(check-equal? (top-interp '{{fun {f (x)} {- 5 x}}
-                            {fun {g (x)} {* 2 {f ({+ 1 x})}}}
-                            {fun {main ()} {* {f ({* 3 -10})} {g (4)}}}}) 0)
-(check-= (top-interp '{{fun {g (x)} {ifleq0? x : {/ x 2} else: {* x 2}}}
-                       {fun {f (x)} {ifleq0? x : {g ({+ x 1})} else: {- x 1}}}
-                       {fun {main ()} {f (-2)}}}) -0.5 0.001)
-(check-= (top-interp '{{fun {g (x)} {ifleq0? x : {/ x 2} else: {* x 2}}}
-                       {fun {f (x)} {ifleq0? x : {g ({+ x 1})} else: {- x 1}}}
-                       {fun {main ()} {f (-1)}}}) 0 0.001)
-(check-= (top-interp '{{fun {g (x)} {ifleq0? x : {/ x 2} else: {* x 2}}}
-                       {fun {f (x)} {ifleq0? x : {g ({+ x 1})} else: {- x 1}}}
-                       {fun {main ()} {f (1)}}}) 0 0.001)
-(check-= (top-interp '{{fun {g (x)} {ifleq0? x : {/ x 2} else: {* x 2}}}
-                       {fun {f (x)} {ifleq0? x : {g ({+ x 1})} else: {g ({- x 1})}}}
-                       {fun {main ()} {f (2)}}}) 2 0.001)
-(check-equal? (interp-fns (parse-prog '{{fun {f (x y)} {+ x y}}
-                                        {fun {main ()} {f (2 14)}}})) 16)
-(check-equal? (interp-fns (parse-prog '{{fun {f (x)} {+ x 14}}
-                                        {fun {main ()} {f ({g (3)})}}
-                                        {fun {g (y)} {* 3 y}}})) 23)
-(check-equal? (interp-fns (parse-prog '{{fun {f (x y z)} {+ x {+ y z}}}
-                                        {fun {main ()} {f ({g (3 4 5)} {g (3 4 5)} {g (3 4 5)})}}
-                                        {fun {g (x y z)} {* x {* y z}}}})) 180)
-(check-equal? (interp-fns (parse-prog '{{fun {f (x y)} 4}
-                                        {fun {main ()} {* 4 {f (2 14)}}}})) 16)
-(check-equal? (interp-fns (parse-prog '{{fun {f ()} 4}
-                                        {fun {main ()} {* 4 {f ()}}}})) 16)
-
-; error checking functionality
-(check-exn (regexp (regexp-quote "check-binop"))
-           (lambda () (interp-fns (parse-prog '{{fun {f (x)} {a x 14}}
-                                                {fun {main ()} {f (2)}}}))))
-(check-exn (regexp (regexp-quote "find-fun"))
-           (lambda () (interp-fns (parse-prog '{{fun {f (x)} {+ x 14}}
-                                                {fun {main ()} {g (2)}}}))))
-(check-exn (regexp (regexp-quote "interp"))
-           (lambda () (interp-fns (parse-prog '{{fun {f (x)} {+ x y}}
-                                                {fun {main ()} {f (2)}}}))))
-(check-exn (regexp (regexp-quote "parse-prog"))
-           (lambda () (interp-fns (parse-prog 3))))
-(check-exn (regexp (regexp-quote "parse-fundef"))
-           (lambda () (interp-fns (parse-prog '{{fun {f (x)} {+ x 14} {'wrong}}
-                                                {fun {main ()} {f (2)}}}))))
-(check-exn (regexp (regexp-quote "parse-fundef"))
-           (lambda () (interp-fns (parse-prog '{{fun {f (x)} {+ x 14}}
-                                                {fun {main (wrong)} {f (2)}}}))))
-(check-exn (regexp (regexp-quote "parse"))
-           (lambda () (interp-fns (parse-prog '{{fun {f (x)}
-                                                     {ifgeq0? x : x else: {- x 1}}}
-                                                {fun {main ()} {f (2)}}}))))
-(check-exn (regexp (regexp-quote "parse-id"))
-           (lambda () (interp-fns (parse-prog '{{fun {* (x)} {+ x 14}}
-                                                {fun {main ()} {f (2)}}}))))
-(check-exn (regexp (regexp-quote "parse-id"))
-           (lambda () (interp-fns (parse-prog '{{fun {else: (x)} {+ x 14}}
-                                                {fun {main ()} {f (2)}}}))))
-(check-exn (regexp (regexp-quote "binop-lookup"))
-           (lambda () (interp-fns (parse-prog '{{fun {f (x)} {/ x 0}}
-                                                {fun {main ()} {f (2)}}}))))
-(check-exn (regexp (regexp-quote "binop-lookup"))
-           (lambda () (top-interp '((fun (ignoreit (x)) (+ 3 4))
-                                    (fun (main ()) (ignoreit ((/ 1 (+ 0 0)))))))))
-(check-exn (regexp (regexp-quote "check-binop"))
-           (lambda () (interp-fns (parse-prog '{{fun {f (x)} {a b c}}
-                                                {fun {main ()} {f (2)}}}))))
-(check-exn (regexp (regexp-quote "parse-fundef"))
-           (lambda () (interp-fns (parse-prog '{{fun {f ((x))} {+ x 14}}
-                                                {fun {main ()} {f(2)}}}))))
-(check-exn (regexp (regexp-quote "parse"))
-           (lambda () (interp-fns (parse-prog '{{fun {f (x)} {+ (x) 14}}
-                                                {fun {main ()} {f(2)}}}))))
-(check-exn (regexp (regexp-quote "parse"))
-           (lambda () (interp-fns (parse-prog '{{fun {f (x)} {+ (x) 14}}
-                                                {fun {(main) ()} {f(2)}}}))))
-(check-exn (regexp (regexp-quote "parse"))
-           (lambda () (interp-fns (parse-prog '{{fun {f (x)} {+ (x) 14}}
-                                                {(fun) {main ()} {f(2)}}}))))
-(check-exn (regexp (regexp-quote "parse-id"))
-           (lambda () (interp-fns (parse-prog '{{fun {(a) (x)} {+ (x) 14}}
-                                                {(fun) {main ()} {(a) (2)}}}))))
-(check-exn (regexp (regexp-quote "interp"))
-           (lambda () (interp-fns (parse-prog '{{fun {f (x y)} {+ x 14}}
-                                                {fun {main ()} {f (2)}}}))))
-(check-exn (regexp (regexp-quote "parse-fundef"))
-           (lambda () (interp-fns (parse-prog '{{fun {f (x x)} {+ x x}}
-                                                {fun {main ()} {f (2 2)}}}))))
-(check-exn (regexp (regexp-quote "interp"))
-           (lambda () (interp-fns (parse-prog '{{fun {f (x)} {+ x 2}}
-                                                {fun {main ()} {f (2 2)}}}))))
-(check-exn (regexp (regexp-quote "interp"))
-           (lambda () (interp-fns (parse-prog '{{fun {f ()} {+ x 2}}
-                                                {fun {main ()} {f (2)}}}))))
-(check-exn (regexp (regexp-quote "parse-fundef"))
-           (lambda () (interp-fns (parse-prog '{{fun {f (x)} {+ x 2}}
-                                                {fun {main (x)} {f (2)}}}))))
-
 
 
