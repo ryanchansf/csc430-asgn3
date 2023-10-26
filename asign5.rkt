@@ -60,7 +60,7 @@
 (struct NumV([val : Real]) #:transparent)
 (struct StrV([val : String]) #:transparent)
 (struct CloV([arg : Symbol] [body : ExprC] [env : Env]) #:transparent)
-(struct PrimV([val : "todo"]) #:transparent)
+(struct PrimV([val : (-> ExprC * ExprC)]) #:transparent)
 
 
 (define-type Value (U NumV StrV BoolV CloV PrimV))
@@ -68,10 +68,11 @@
 (define top-env (cons (Binding 'true (BoolV #t))
                       (cons (Binding 'false (BoolV #f))
                             (cons (Binding '+ (PrimV +))
-                                  (cons (Binding 1 2)
-                                        (cons (Binding 1 2)
-                                              (cons (Binding 1 2)
-                                                    (cons (Binding 1 2) '()))))))))
+                                  (cons (Binding '- (PrimV -))
+                                        (cons (Binding '* (PrimV *))
+                                              (cons (Binding '/ (PrimV /))
+                                                    (cons (Binding '<= (PrimV <=))
+                                                          (cons (Binding 'equal? (PrimV equal?)) '())))))))))
 
 
 ; ***** Parser *****
@@ -79,18 +80,34 @@
 ; given an Sexp, recursively map Sexp to ExprC
 (define (parse [s : Sexp]) : ExprC
   (match s
-    ; parse real numbers
+    ; parse real numbers to NumC
     [(? real? n) (NumC n)]
-    ; parse function applications
-    [(list name (list args ...)) (AppC (parse-id name) (map parse args))]
     ; parse symbols to IdC
     [(? symbol? s) (parse-id s)]
-    ; parse binary operations
-    [(list (? symbol? s) l r) (BinopC (check-binop s) (parse l) (parse r))]
-    ; parse ifleq0 statements
-    [(list 'ifleq0? x ': y 'else: z) (Cond0C (parse x) (parse y) (parse z))]
+    ; parse strings to StrC
+    [(? string? s) (StrC s)]
+    ; parse conditionals to CondC
+    [(list c '? t 'else: e) (CondC (parse c) (parse t) (parse e))]
+    ; parse functions to BlamC
+    [(list 'blam (list (? symbol? args) ...) body) (BlamC (map parse args) (parse body))]
+    ; desugar with to AppC and BlamC
+    [(list 'with (list (? list? locals) ...) ': body) (AppC (BlamC (map desugar-id locals) (parse body)) (map desugar-expr locals))]
+    ; parse function applications to AppC
+    [(cons f (? list? r))] ;"TODO"
     ; catch illegal expressions
     [other (error 'parse "PAIG: expected legal expression, got ~e" other)]))
+
+; desugar with local expr to ExprC
+(define (desugar-expr [locals : (Listof Sexp)] [body : Sexp]) : ExprC
+  (match
+    [(list expr 'as _) (parse expr)]
+    [other (error 'desugar-expr "PAIG: expected valid with clause, got ~e" other)]))
+
+; desugar with local id to IdC
+(define (desugar-id [local : (Listof Sexp)] [body : Sexp]) : IdC
+  (match
+    [(list _ 'as id) (parse-id id)]
+    [other (error 'desugar-id "PAIG: expected valid with clause, got ~e" other)]))
 
 ; given an Sexp, check Sexp against taken ids and parse symbol to IdC
 (define (parse-id [s : Sexp]) : IdC
