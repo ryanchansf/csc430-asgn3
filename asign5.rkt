@@ -61,52 +61,58 @@
   (cond
     [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)])
                                 (cond
-                                [(and (NumV? l) (NumV? r)) (NumV (+ (NumV-val l) (NumV-val r)))]
-                                [else (error '+ "PAIG: non-number operands to (+ a b) → real")]))]
+                                  [(and (NumV? l) (NumV? r)) (NumV (+ (NumV-val l) (NumV-val r)))]
+                                  [else (error '+ "PAIG: non-number operands to (+ a b) → real")]))]
     [else (error '+ "PAIG: Incorrect number of arguments to '+', expected 2, got ~e" (length vals))]))
 
 ; given two values, subtract them or error if illegal
 (define (top-minus [vals : (Listof Value)]) : NumV
   (cond
-    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)]) (cond
-                                [(and (NumV? l) (NumV? r)) (NumV (- (NumV-val l) (NumV-val r)))]
-                                [else (error '- "PAIG: non-number operands to (- a b) → real")]))]
+    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)])
+                                (cond
+                                  [(and (NumV? l) (NumV? r)) (NumV (- (NumV-val l) (NumV-val r)))]
+                                  [else (error '- "PAIG: non-number operands to (- a b) → real")]))]
     [else (error '- "PAIG: Incorrect number of arguments to '-', expected 2, got ~e" (length vals))]))
 
 ; given two values, multiply them together or error if illegal
 (define (top-mult [vals : (Listof Value)]) : NumV
   (cond
-    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)]) (cond
-                                [(and (NumV? l) (NumV? r)) (NumV (* (NumV-val l) (NumV-val r)))]
-                                [else (error '* "PAIG: non-number operands to (* a b) → real")]))]
+    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)])
+                                (cond
+                                  [(and (NumV? l) (NumV? r)) (NumV (* (NumV-val l) (NumV-val r)))]
+                                  [else (error '* "PAIG: non-number operands to (* a b) → real")]))]
     [else (error '* "PAIG: Incorrect number of arguments to '*', expected 2, got ~e" (length vals))]))
 
 ; given two values, divide them or error if illegal
 (define (top-divide [vals : (Listof Value)]) : NumV
   (cond
-    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)]) (cond
-                                                                                          [(and (NumV? l) (NumV? r)) (cond
-                                                                                                                       [(equal? (NumV-val r) 0) (error '/ "PAIG: illegal divide by 0")]
-                                                                                                                       [else (NumV (/ (NumV-val l) (NumV-val r)))])]
-                                                                                          [else (error '/ "PAIG: non-number operands to (/ a b) → real")]))]
+    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)])
+                                (cond
+                                  [(and (NumV? l) (NumV? r))
+                                   (cond
+                                     [(equal? (NumV-val r) 0) (error '/ "PAIG: illegal divide by 0")]
+                                     [else (NumV (/ (NumV-val l) (NumV-val r)))])]
+                                  [else (error '/ "PAIG: non-number operands to (/ a b) → real")]))]
     [else (error '/ "PAIG: Incorrect number of arguments to '/', expected 2, got ~e" (length vals))]))
 
 ; given two values l and r, return l <= r or error if illegal
 (define (top-<= [vals : (Listof Value)]) : BoolV
   (cond
-    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)]) (cond
-                                [(and (NumV? l) (NumV? r)) (BoolV (<= (NumV-val l) (NumV-val r)))]
-                                [else (error '<= "PAIG: non-number operands to (<= a b) → boolean")]))]
+    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)])
+                                (cond
+                                  [(and (NumV? l) (NumV? r)) (BoolV (<= (NumV-val l) (NumV-val r)))]
+                                  [else (error '<= "PAIG: non-number operands to (<= a b) → boolean")]))]
     [else (error '<= "PAIG: Incorrect number of arguments to '<=', expected 2, got ~e" (length vals))]))
 
 ; give two values l and r, return l == r or error if illegal
 (define (top-equal? [vals : (Listof Value)]) : BoolV
   (cond
-    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)]) (cond
-                                [(and (NumV? l) (NumV? r)) (BoolV (equal? (NumV-val l) (NumV-val r)))]
-                                [(and (StrV? l) (StrV? r)) (BoolV (equal? (StrV-val l) (StrV-val r)))]
-                                [(and (BoolV? l) (BoolV? r)) (BoolV (equal? (BoolV-val l) (BoolV-val r)))]
-                                [else (BoolV #f)]))]
+    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)])
+                                (cond
+                                  [(and (NumV? l) (NumV? r)) (BoolV (equal? (NumV-val l) (NumV-val r)))]
+                                  [(and (StrV? l) (StrV? r)) (BoolV (equal? (StrV-val l) (StrV-val r)))]
+                                  [(and (BoolV? l) (BoolV? r)) (BoolV (equal? (BoolV-val l) (BoolV-val r)))]
+                                  [else (BoolV #f)]))]
     [else (error 'equal? "PAIG: Incorrect number of arguments to 'equal', expected 2, got ~e" (length vals))]))
 
 
@@ -150,9 +156,15 @@
     ; parse conditionals to CondC
     [(list c '? t 'else: e) (CondC (parse c) (parse t) (parse e))]
     ; parse functions to BlamC
-    [(list 'blam (list (? symbol? args) ...) body) (BlamC (map parse-id (cast args (Listof Symbol))) (parse body))]
+    [(list 'blam (? list? args) body)
+     (cond
+       [(equal? #f (check-duplicates args)) (BlamC (map parse-id (cast args (Listof Sexp))) (parse body))]
+       [else (error 'parse "PAIG: duplicate arguments: ~e" args)])]
     ; desugar with to AppC and BlamC
-    [(list 'with (? list? locals) ... ': body) (AppC (BlamC (map desugar-id (cast locals (Listof (Listof Sexp)))) (parse body)) (map desugar-expr (cast locals (Listof (Listof Sexp)))))]
+    [(list 'with (? list? locals) ... ': body) (AppC (BlamC
+                                                      (map desugar-id (cast locals (Listof (Listof Sexp))))
+                                                      (parse body))
+                                                     (map desugar-expr (cast locals (Listof (Listof Sexp)))))]
     ; parse function applications to AppC
     [(cons f (? list? r)) (AppC (parse f) (map parse r))]
     ; catch illegal expressions
@@ -161,8 +173,9 @@
 ; desugar with local expr to ExprC
 (define (desugar-expr [local : (Listof Sexp)]) : ExprC
   (match local
-    [(list expr 'as _) (parse expr)]
-    [other (error 'desugar-expr "PAIG: expected valid with clause, got ~e" other)]))
+    [(list expr 'as _) (parse expr)]))
+; invalid with clause always caught in desugar-id
+;[other (error 'desugar-expr "PAIG: expected valid with clause, got ~e" other)]))
 
 ; desugar with local id to IdC
 (define (desugar-id [local : (Listof Sexp)]) : IdC
@@ -210,15 +223,19 @@
     [(AppC f vals) (local ([define f-value (interp f env)])
                      (cond
                        ; anonymous function application
-                       [(CloV? f-value) (cond
-                                          ; ensure correct number of arguments
-                                          [(equal? (length vals) (length (CloV-args f-value)))
-                                           (interp (CloV-body f-value)
-                                                   ; extend the env
-                                                   (append (map (λ ([arg : IdC] [val : ExprC]) : Binding (Binding (IdC-s arg) (interp val env))) (CloV-args f-value) vals) env))]
-                                          [else (error
-                                                 'interp "PAIG: Incorrect number of arguments for function: \"~e\""
-                                                 f-value)])]
+                       [(CloV? f-value)
+                        (cond
+                          ; ensure correct number of arguments
+                          [(equal? (length vals) (length (CloV-args f-value)))
+                           (interp (CloV-body f-value)
+                                   ; extend the env
+                                   (append
+                                    (map (λ ([arg : IdC] [val : ExprC]) : Binding
+                                           (Binding (IdC-s arg) (interp val env))) (CloV-args f-value) vals)
+                                    env))]
+                          [else (error
+                                 'interp "PAIG: Incorrect number of arguments for function: \"~e\""
+                                 f-value)])]
                        ; built-in function application
                        [(PrimV? f-value) ((PrimV-val f-value) (map (λ ([val : ExprC]) : Value (interp val env)) vals))]
                        ; invalid function application
@@ -294,6 +311,25 @@
            (lambda () (top-interp '{<= 3 5 2})))
 (check-exn (regexp (regexp-quote "equal?"))
            (lambda () (top-interp '{equal? 3 3 3})))
+(check-exn (regexp (regexp-quote "desugar-id"))
+           (lambda () (top-interp '{with [{blam (x) {+ x 1}} as f f] : {f 2}})))
+(check-exn (regexp (regexp-quote "parse-id"))
+           (lambda () (top-interp '{with [{blam (?) {+ x 1}} as f] : {f 2}})))
+(check-exn (regexp (regexp-quote "lookup"))
+           (lambda () (top-interp '{equal? f 3 3})))
+(check-exn (regexp (regexp-quote "interp"))
+           (lambda () (top-interp '{{blam (x) {+ x 1}} 3 4})))
+(check-exn (regexp (regexp-quote "interp"))
+           (lambda () (top-interp '{3 4})))
+(check-exn (regexp (regexp-quote "interp"))
+           (lambda () (top-interp '{3 ? 4 else: 5})))
+(check-exn (regexp (regexp-quote "parse"))
+           (lambda () (top-interp '{#f})))
+(check-exn (regexp (regexp-quote "parse-id"))
+           (lambda () (top-interp '{{blam ({x}) {+ x 1}} 3})))
+(check-exn (regexp (regexp-quote "parse"))
+           (lambda () (top-interp '{blam (x x) 3})))
+
 
 
 
