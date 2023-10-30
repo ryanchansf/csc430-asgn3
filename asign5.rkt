@@ -152,7 +152,7 @@
     ; parse functions to BlamC
     [(list 'blam (list (? symbol? args) ...) body) (BlamC (map parse-id (cast args (Listof Symbol))) (parse body))]
     ; desugar with to AppC and BlamC
-    [(list 'with (list (? list? locals) ...) ': body) (AppC (BlamC (map desugar-id (cast locals (Listof (Listof Sexp)))) (parse body)) (map desugar-expr (cast locals (Listof (Listof Sexp)))))]
+    [(list 'with (? list? locals) ... ': body) (AppC (BlamC (map desugar-id (cast locals (Listof (Listof Sexp)))) (parse body)) (map desugar-expr (cast locals (Listof (Listof Sexp)))))]
     ; parse function applications to AppC
     [(cons f (? list? r)) (AppC (parse f) (map parse r))]
     ; catch illegal expressions
@@ -236,4 +236,64 @@
 
 
 ; ***** Test Cases *****
-(check-equal? (top-interp '(+ 1 2)) "3")
+
+; built-in functions
+(check-equal? (top-interp '{+ 1 2}) "3")
+(check-equal? (top-interp '{* 1 2}) "2")
+(check-equal? (top-interp '{/ 6 2}) "3")
+(check-equal? (top-interp '{- 1 2}) "-1")
+(check-equal? (top-interp '{<= 1 2}) "true")
+(check-equal? (top-interp '{<= 3 2}) "false")
+(check-equal? (top-interp '{equal? 1 1}) "true")
+(check-equal? (top-interp '{equal? 2 1}) "false")
+(check-equal? (top-interp '{equal? "a" "a"}) "true")
+(check-equal? (top-interp '{equal? "b" "a"}) "false")
+(check-equal? (top-interp '{equal? 1 "1"}) "false")
+
+; general
+(check-equal? (top-interp '{{blam (x) {+ x 1}} 2}) "3")
+(check-equal? (top-interp '{{blam (x y) {+ x y}} 2 4}) "6")
+(check-equal? (top-interp '{with [{blam (x) {+ x 1}} as f] : {f 2}}) "3")
+(check-equal? (top-interp '{with [{blam (x) {+ x 1}} as f] : {f 2}}) "3")
+(check-equal? (top-interp '{with [{blam (x) {+ x 1}} as f] [{blam (y) 3} as g] : {f {g "string"}}}) "4")
+(check-equal? (top-interp '{with [{blam (x) {equal? x "5"}} as f] : {{f "5"} ? 5 else: 6}}) "5")
+(check-equal? (top-interp '{with [{blam (x) {equal? x "5"}} as f] : {{f "4"} ? 5 else: 6}}) "6")
+(check-equal? (top-interp '{equal? {equal? 1 2} {equal? 2 3}}) "true")
+(check-equal? (top-interp '{equal? {<= 1 2} {<= 4 3}}) "false")
+(check-equal? (top-interp '{blam (x) {+ x 1}}) "#<procedure>")
+(check-equal? (top-interp '{{<= 1 2} ? "yes" else: "no"}) "\"yes\"")
+(check-equal? (top-interp '{{blam (x) {x 3 4}} +}) "7")
+(check-equal? (top-interp '{{blam (x) x} +}) "#<primop>")
+
+; errors
+(check-exn (regexp (regexp-quote "user-error"))
+           (lambda () (top-interp '{error "checking user calling an error"})))
+(check-exn (regexp (regexp-quote "error"))
+           (lambda () (top-interp '{error})))
+(check-exn (regexp (regexp-quote "+"))
+           (lambda () (top-interp '{+ 3})))
+(check-exn (regexp (regexp-quote "+"))
+           (lambda () (top-interp '{+ 5 "hello"})))
+(check-exn (regexp (regexp-quote "-"))
+           (lambda () (top-interp '{- 3})))
+(check-exn (regexp (regexp-quote "-"))
+           (lambda () (top-interp '{- 5 "hello"})))
+(check-exn (regexp (regexp-quote "*"))
+           (lambda () (top-interp '{* 3 5 2})))
+(check-exn (regexp (regexp-quote "*"))
+           (lambda () (top-interp '{* 3 "hello"})))
+(check-exn (regexp (regexp-quote "/"))
+           (lambda () (top-interp '{/ 3 5 2})))
+(check-exn (regexp (regexp-quote "/"))
+           (lambda () (top-interp '{/ 3 0})))
+(check-exn (regexp (regexp-quote "/"))
+           (lambda () (top-interp '{/ 3 "hello"})))
+(check-exn (regexp (regexp-quote "<="))
+           (lambda () (top-interp '{<= 3 "hello"})))
+(check-exn (regexp (regexp-quote "<="))
+           (lambda () (top-interp '{<= 3 5 2})))
+(check-exn (regexp (regexp-quote "equal?"))
+           (lambda () (top-interp '{equal? 3 3 3})))
+
+
+
