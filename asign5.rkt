@@ -4,22 +4,6 @@
 ; Full project implemented
 
 
-; new features
-; @- change abstract syntax
-; - update parser and interpreter to handle new abstract syntax
-; @- add environments
-; @- serialize
-; @- booleans
-; @- closures (straight out of book)
-; @- desugar with to blam
-; - user error raising
-; - built-ins (equal, <=, *, -, etc)
-
-; - why {Expr Expr ...} not {BlamC Expr ...}
-; - why new env with r as mt-env instead of current env
-
-
-
 ; ***** Abstract Syntax *****
 
 (define-type ExprC (U NumC IdC StrC CondC BlamC AppC))
@@ -55,16 +39,78 @@
 (define extend-env cons)
 
 
+; Value definition
+(define-type Value (U NumV StrV BoolV CloV PrimV))
 
 (struct BoolV([val : Boolean]) #:transparent)
 (struct NumV([val : Real]) #:transparent)
 (struct StrV([val : String]) #:transparent)
 (struct CloV([args : (Listof IdC)] [body : ExprC] [env : Env]) #:transparent)
-(struct PrimV([val : (-> Value Value Value)]) #:transparent)
+(struct PrimV([val : (U (-> (Listof Value) Value) (-> (Listof Value) Nothing))]) #:transparent)
 
-(define-type Value (U NumV StrV BoolV CloV PrimV))
+; BUILT-IN FUNCTIONS
+
+; given a message, throw a user error
+(define (top-error [vals : (Listof Value)]) : Nothing
+  (cond
+    [(equal? (length vals) 1) (error 'user-error "PAIG: user-error: ~e" (serialize (first vals)))]
+    [else (error 'error "PAIG: Incorrect number of arguments to error, expected 1, got ~e" (length vals))]))
+
+; given two values, add them together or error if illegal
+(define (top-plus [vals : (Listof Value)]) : NumV
+  (cond
+    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)])
+                                (cond
+                                [(and (NumV? l) (NumV? r)) (NumV (+ (NumV-val l) (NumV-val r)))]
+                                [else (error '+ "PAIG: non-number operands to (+ a b) → real")]))]
+    [else (error '+ "PAIG: Incorrect number of arguments to '+', expected 2, got ~e" (length vals))]))
+
+; given two values, subtract them or error if illegal
+(define (top-minus [vals : (Listof Value)]) : NumV
+  (cond
+    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)]) (cond
+                                [(and (NumV? l) (NumV? r)) (NumV (- (NumV-val l) (NumV-val r)))]
+                                [else (error '- "PAIG: non-number operands to (- a b) → real")]))]
+    [else (error '- "PAIG: Incorrect number of arguments to '-', expected 2, got ~e" (length vals))]))
+
+; given two values, multiply them together or error if illegal
+(define (top-mult [vals : (Listof Value)]) : NumV
+  (cond
+    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)]) (cond
+                                [(and (NumV? l) (NumV? r)) (NumV (* (NumV-val l) (NumV-val r)))]
+                                [else (error '* "PAIG: non-number operands to (* a b) → real")]))]
+    [else (error '* "PAIG: Incorrect number of arguments to '*', expected 2, got ~e" (length vals))]))
+
+; given two values, divide them or error if illegal
+(define (top-divide [vals : (Listof Value)]) : NumV
+  (cond
+    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)]) (cond
+                                                                                          [(and (NumV? l) (NumV? r)) (cond
+                                                                                                                       [(equal? (NumV-val r) 0) (error '/ "PAIG: illegal divide by 0")]
+                                                                                                                       [else (NumV (/ (NumV-val l) (NumV-val r)))])]
+                                                                                          [else (error '/ "PAIG: non-number operands to (/ a b) → real")]))]
+    [else (error '/ "PAIG: Incorrect number of arguments to '/', expected 2, got ~e" (length vals))]))
+
+; given two values l and r, return l <= r or error if illegal
+(define (top-<= [vals : (Listof Value)]) : BoolV
+  (cond
+    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)]) (cond
+                                [(and (NumV? l) (NumV? r)) (BoolV (<= (NumV-val l) (NumV-val r)))]
+                                [else (error '<= "PAIG: non-number operands to (<= a b) → boolean")]))]
+    [else (error '<= "PAIG: Incorrect number of arguments to '<=', expected 2, got ~e" (length vals))]))
+
+; give two values l and r, return l == r or error if illegal
+(define (top-equal? [vals : (Listof Value)]) : BoolV
+  (cond
+    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)]) (cond
+                                [(and (NumV? l) (NumV? r)) (BoolV (equal? (NumV-val l) (NumV-val r)))]
+                                [(and (StrV? l) (StrV? r)) (BoolV (equal? (StrV-val l) (StrV-val r)))]
+                                [(and (BoolV? l) (BoolV? r)) (BoolV (equal? (BoolV-val l) (BoolV-val r)))]
+                                [else (BoolV #f)]))]
+    [else (error 'equal? "PAIG: Incorrect number of arguments to 'equal', expected 2, got ~e" (length vals))]))
 
 
+; top-env definition
 (define top-env (cons (Binding 'true (BoolV #t))
                       (cons (Binding 'false (BoolV #f))
                             (cons (Binding '+ (PrimV top-plus))
@@ -72,46 +118,9 @@
                                         (cons (Binding '* (PrimV top-mult))
                                               (cons (Binding '/ (PrimV top-divide))
                                                     (cons (Binding '<= (PrimV top-<=))
-                                                          (cons (Binding 'equal? (PrimV top-equal?)) '())))))))))
-; given two values, add them together or error if illegal
-(define (top-plus [l : Value] [r : Value]) : NumV
-  (cond
-    [(and (NumV? l) (NumV? r)) (NumV (+ (NumV-val l) (NumV-val r)))]
-    [else (error '+ "PAIG: non-number operands to (+ a b) → real")]))
+                                                          (cons (Binding 'error (PrimV top-error))
+                                                                (cons (Binding 'equal? (PrimV top-equal?)) '()))))))))))
 
-; given two values, subtract them or error if illegal
-(define (top-minus [l : Value] [r : Value]) : NumV
-  (cond
-    [(and (NumV? l) (NumV? r)) (NumV (- (NumV-val l) (NumV-val r)))]
-    [else (error '- "PAIG: non-number operands to (- a b) → real")]))
-
-; given two values, multiply them together or error if illegal
-(define (top-mult [l : Value] [r : Value]) : NumV
-  (cond
-    [(and (NumV? l) (NumV? r)) (NumV (* (NumV-val l) (NumV-val r)))]
-    [else (error '* "PAIG: non-number operands to (* a b) → real")]))
-
-; given two values, divide them or error if illegal
-(define (top-divide [l : Value] [r : Value]) : NumV
-  (cond
-    [(and (NumV? l) (NumV? r)) (cond
-                                 [(equal? (NumV-val r) 0) (error '/ "PAIG: illegal divide by 0")]
-                                 [else (NumV (/ (NumV-val l) (NumV-val r)))])]
-    [else (error '/ "PAIG: non-number operands to (/ a b) → real")]))
-
-; given two values l and r, return l <= r or error if illegal
-(define (top-<= [l : Value] [r : Value]) : BoolV
-  (cond
-    [(and (NumV? l) (NumV? r)) (BoolV (<= (NumV-val l) (NumV-val r)))]
-    [else (error '<= "PAIG: non-number operands to (<= a b) → boolean")]))
-
-; give two values l and r, return l == r or error if illegal
-(define (top-equal? [l : Value] [r : Value]) : BoolV
-  (cond
-    [(and (NumV? l) (NumV? r)) (BoolV (equal? (NumV-val l) (NumV-val r)))]
-    [(and (StrV? l) (StrV? r)) (BoolV (equal? (StrV-val l) (StrV-val r)))]
-    [(and (BoolV? l) (BoolV? r)) (BoolV (equal? (BoolV-val l) (BoolV-val r)))]
-    [else (BoolV #f)]))
 
 ; ***** Serializer *****
 
@@ -141,9 +150,9 @@
     ; parse conditionals to CondC
     [(list c '? t 'else: e) (CondC (parse c) (parse t) (parse e))]
     ; parse functions to BlamC
-    [(list 'blam (list (? symbol? args) ...) body) (BlamC (map parse args) (parse body))]
+    [(list 'blam (list (? symbol? args) ...) body) (BlamC (map parse-id (cast args (Listof Symbol))) (parse body))]
     ; desugar with to AppC and BlamC
-    [(list 'with (list (? list? locals) ...) ': body) (AppC (BlamC (map desugar-id locals) (parse body)) (map desugar-expr locals))]
+    [(list 'with (list (? list? locals) ...) ': body) (AppC (BlamC (map desugar-id (cast locals (Listof (Listof Sexp)))) (parse body)) (map desugar-expr (cast locals (Listof (Listof Sexp)))))]
     ; parse function applications to AppC
     [(cons f (? list? r)) (AppC (parse f) (map parse r))]
     ; catch illegal expressions
@@ -187,7 +196,7 @@
   (match e
     [(NumC n) (NumV n)]
     [(StrC s) (StrV s)]
-    ; any Id not substituted is unbound
+    ; search env for binding
     [(IdC s) (lookup (IdC s) env)]
     ; evaluate conditional
     [(CondC c t e) (local ([define c-val (interp c env)])
@@ -195,24 +204,24 @@
                        [(equal? c-val (BoolV #t)) (interp t env)]
                        [(equal? c-val (BoolV #f)) (interp e env)]
                        [else (error 'interp "PAIG: expected boolean value from condition, got ~e" c-val)]))]
-    ; evalute BlamC
+    ; evalute BlamC to CloV
     [(BlamC args body) (CloV args body env)]
-    ; find function, eagerly evaluate arguments, then evaluate body
-    ; interp f into CloV, extend env based on current
+    ; interp function applications into CloV, extend env based on current
     [(AppC f vals) (local ([define f-value (interp f env)])
                      (cond
                        ; anonymous function application
                        [(CloV? f-value) (cond
+                                          ; ensure correct number of arguments
                                           [(equal? (length vals) (length (CloV-args f-value)))
                                            (interp (CloV-body f-value)
-                                                   (extend-env (map (λ ([arg : Symbol] [val : ExprC]) : Binding (Binding arg (interp val env))) (CloV-args f-value) vals) env))]
+                                                   ; extend the env
+                                                   (append (map (λ ([arg : IdC] [val : ExprC]) : Binding (Binding (IdC-s arg) (interp val env))) (CloV-args f-value) vals) env))]
                                           [else (error
                                                  'interp "PAIG: Incorrect number of arguments for function: \"~e\""
                                                  f-value)])]
                        ; built-in function application
-                       [(PrimV? f-value) (cond
-                                           [(equal? (length vals) 2) ((PrimV-val f-value) (interp (first vals) env) (interp (second vals) env))]
-                                           [else (error 'interp "PAIG: Incorrect number of arguments, expected 2, got ~e" (length vals))])]
+                       [(PrimV? f-value) ((PrimV-val f-value) (map (λ ([val : ExprC]) : Value (interp val env)) vals))]
+                       ; invalid function application
                        [else (error 'interp "PAIG: illegal function application, cannot apply ~e" f-value)]))]))
 
 
@@ -226,4 +235,5 @@
 
 
 
-
+; ***** Test Cases *****
+(check-equal? (top-interp '(+ 1 2)) "3")
