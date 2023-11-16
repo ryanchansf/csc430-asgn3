@@ -31,15 +31,7 @@
 (struct AppC([f : ExprC] [args : (Listof ExprC)]) #:transparent)
 
 
-; ENVIRONMENTS
-(struct Binding([name : Symbol] [val : Value]) #:transparent)
-
-(define-type Env (Listof Binding))
-(define mt-env '())
-(define extend-env cons)
-
-
-; Value definition
+; ***** Values *****
 (define-type Value (U NumV StrV BoolV CloV PrimV))
 
 (struct BoolV([val : Boolean]) #:transparent)
@@ -47,6 +39,12 @@
 (struct StrV([val : String]) #:transparent)
 (struct CloV([args : (Listof IdC)] [body : ExprC] [env : Env]) #:transparent)
 (struct PrimV([val : (U (-> (Listof Value) Value) (-> (Listof Value) Nothing))]) #:transparent)
+
+
+; ***** Environments *****
+
+(struct Binding([name : Symbol] [val : Value]) #:transparent)
+(define-type Env (Listof Binding))
 
 ; BUILT-IN FUNCTIONS
 
@@ -161,10 +159,15 @@
        [(equal? #f (check-duplicates args)) (BlamC (map parse-id (cast args (Listof Sexp))) (parse body))]
        [else (error 'parse "PAIG: duplicate arguments: ~e" args)])]
     ; desugar with to AppC and BlamC
-    [(list 'with (? list? locals) ... ': body) (AppC (BlamC
-                                                      (map desugar-id (cast locals (Listof (Listof Sexp))))
-                                                      (parse body))
-                                                     (map desugar-expr (cast locals (Listof (Listof Sexp)))))]
+    [(list 'with (? list? locals) ... ': body)
+     (local ([define with-vars (map desugar-id (cast locals (Listof (Listof Sexp))))])
+       (cond
+         [(equal? (check-duplicates with-vars) #f) (AppC (BlamC
+                                                          with-vars
+                                                          (parse body))
+                                                         (map desugar-expr (cast locals (Listof (Listof Sexp)))))]
+         [else (error 'parse "PAIG: duplicate vars in ~e" with-vars)])
+       )]
     ; parse function applications to AppC
     [(cons f (? list? r)) (AppC (parse f) (map parse r))]
     ; catch illegal expressions
@@ -175,7 +178,6 @@
   (match local
     [(list expr 'as _) (parse expr)]))
 ; invalid with clause always caught in desugar-id
-;[other (error 'desugar-expr "PAIG: expected valid with clause, got ~e" other)]))
 
 ; desugar with local id to IdC
 (define (desugar-id [local : (Listof Sexp)]) : IdC
@@ -228,11 +230,12 @@
                           ; ensure correct number of arguments
                           [(equal? (length vals) (length (CloV-args f-value)))
                            (interp (CloV-body f-value)
-                                   ; extend the env
+                                   ; extend the env by combining arg-value bindings and closure env 
                                    (append
                                     (map (λ ([arg : IdC] [val : ExprC]) : Binding
                                            (Binding (IdC-s arg) (interp val env))) (CloV-args f-value) vals)
-                                    env))]
+                                    ; since (interp f env) could add bindings, use closure's env not env
+                                    (CloV-env f-value)))]
                           [else (error
                                  'interp "PAIG: Incorrect number of arguments for function: \"~e\""
                                  f-value)])]
@@ -245,7 +248,8 @@
 ; lookup binding in environment
 (define (lookup [s : IdC] [env : Env]) : Value
   (match env
-    ['() (error 'lookup "PAIG: name not found: ~e" s)]
+    ; binding doesn't exist
+    ['() (error 'lookup "PAIG: name not found: ~e" (IdC-s s))]
     [(cons (Binding name val) r) (cond
                                    [(symbol=? (IdC-s s) name) val]
                                    [else (lookup s r)])]))
@@ -255,7 +259,7 @@
 ; ***** Test Cases *****
 
 ; built-in functions
-(check-equal? (top-interp '{+ 1 2}) "3")
+
 (check-equal? (top-interp '{* 1 2}) "2")
 (check-equal? (top-interp '{/ 6 2}) "3")
 (check-equal? (top-interp '{- 1 2}) "-1")
@@ -281,6 +285,13 @@
 (check-equal? (top-interp '{{<= 1 2} ? "yes" else: "no"}) "\"yes\"")
 (check-equal? (top-interp '{{blam (x) {x 3 4}} +}) "7")
 (check-equal? (top-interp '{{blam (x) x} +}) "#<primop>")
+
+;(check-equal? (parse '((g) 15)) #t)
+(check-equal?
+ (top-interp '{{blam (seven) {seven}}
+               {{blam (minus) (blam () {minus (+ 3 10) (* 2 3)})} {blam (x y) {+ x (* -1 y)}}}}) "7")
+(check-equal? (top-interp '{{blam (three) {three}} {{blam (x) {blam () {x 1 2}}} {blam (x y) {+ x y}}}}) "3")
+(check-equal? (top-interp '{{blam () {equal? 2 2}}}) "true")
 
 ; errors
 (check-exn (regexp (regexp-quote "user-error"))
@@ -329,6 +340,8 @@
            (lambda () (top-interp '{{blam ({x}) {+ x 1}} 3})))
 (check-exn (regexp (regexp-quote "parse"))
            (lambda () (top-interp '{blam (x x) 3})))
+(check-exn (regexp (regexp-quote "parse"))
+           (lambda () (parse '{with [(blam () 3) as z] [9 as z] : (z)})))
 
 
 
