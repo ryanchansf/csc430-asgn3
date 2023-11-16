@@ -43,15 +43,16 @@
 
 ; ***** Environments *****
 
-(struct Binding([name : Symbol] [val : Value]) #:transparent)
+(struct Binding([name : Symbol] [val : Natural]) #:transparent)
 (define-type Env (Listof Binding))
 
 
 ; ***** Interpreter *****
 
 ; given an Sexp, combine parse and evaluate, serialize final Value
-(define (top-interp [s : Sexp]) : String
-  (serialize (interp (parse s) top-env)))
+(define (top-interp [s : s-expression] [memsize : Natural]) : string
+  (serialize (interp (parse s) initial-env (make-initial-store memsize))))
+
 
 ; given an ExprC and list of FundefCs, recursively evaluate ExprCs to resolve applications
 (define (interp [e : ExprC] [env : Env]) : Value
@@ -171,15 +172,41 @@
 
 
 ; top-env definition
-(define top-env (cons (Binding 'true (BoolV #t))
-                      (cons (Binding 'false (BoolV #f))
-                            (cons (Binding '+ (PrimV top-plus))
-                                  (cons (Binding '- (PrimV top-minus))
-                                        (cons (Binding '* (PrimV top-mult))
-                                              (cons (Binding '/ (PrimV top-divide))
-                                                    (cons (Binding '<= (PrimV top-<=))
-                                                          (cons (Binding 'error (PrimV top-error))
-                                                                (cons (Binding 'equal? (PrimV top-equal?)) '()))))))))))
+(define top-env (cons (Binding 'true 1)
+                      (cons (Binding 'false 2)
+                            (cons (Binding '+ 3)
+                                  (cons (Binding '- 4)
+                                        (cons (Binding '* 5)
+                                              (cons (Binding '/ 6)
+                                                    (cons (Binding '<= 7)
+                                                          (cons (Binding 'error 8)
+                                                                (cons (Binding 'equal? 9) '()))))))))))
+
+
+; ***** Store *****
+
+; first value is index of next free space
+; primitive operation values
+; empty space for program
+
+; creates the initial store containing values for top-env names
+(define (make-initial-store [n : Natural]) : vector
+  (define store (make-vector (+ 1 13 n)))
+  ; set first element to index of first open element
+  (vector-set! store 0 14)
+  ; add top-env values
+  (vector-set! store 1 (BoolV #t))
+  (vector-set! store 2 (BoolV #f))
+  (vector-set! store 3 (PrimV top-plus))
+  (vector-set! store 4 (PrimV top-minus))
+  (vector-set! store 5 (PrimV top-mult))
+  (vector-set! store 6 (PrimV top-divide))
+  (vector-set! store 7 (PrimV top-<=))
+  (vector-set! store 8 (PrimV top-error))
+  (vector-set! store 9 (PrimV top-equal?))
+  
+  store
+  ))
 
 
 ; ***** Serializer *****
