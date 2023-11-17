@@ -32,13 +32,15 @@
 
 
 ; ***** Values *****
-(define-type Value (U NumV StrV BoolV CloV PrimV))
+(define-type Value (U NumV StrV BoolV CloV PrimV ArrV))
 
 (struct BoolV([val : Boolean]) #:transparent)
 (struct NumV([val : Real]) #:transparent)
 (struct StrV([val : String]) #:transparent)
 (struct CloV([args : (Listof IdC)] [body : ExprC] [env : Env]) #:transparent)
-(struct PrimV([val : (U (-> (Listof Value) Value) (-> (Listof Value) Nothing))]) #:transparent)
+(struct PrimV([val : (U (-> (Listof Value) Value) (-> (Listof Value) Nothing) (-> (Listof Value) vector Value))]) #:transparent)
+(struct ArrV([head : Natural] [tail : Natural]) #:transparent)
+
 
 
 ; ***** Environments *****
@@ -159,7 +161,7 @@
                                   [else (error '<= "PAIG: non-number operands to (<= a b) → boolean")]))]
     [else (error '<= "PAIG: Incorrect number of arguments to '<=', expected 2, got ~e" (length vals))]))
 
-; give two values l and r, return l == r or error if illegal
+; given two values l and r, return l == r or error if illegal
 (define (top-equal? [vals : (Listof Value)]) : BoolV
   (cond
     [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)])
@@ -170,6 +172,54 @@
                                   [else (BoolV #f)]))]
     [else (error 'equal? "PAIG: Incorrect number of arguments to 'equal', expected 2, got ~e" (length vals))]))
 
+; given two values size and initial value, create an array
+(define (make-array [vals : (Listof Value)] [store : vector]) : ArrV
+  (cond
+    [(equal? (length vals) 2) (local ([define n (first vals)] [define init (second vals)])
+                                (cond
+                                  [(> (NumV-n n) 0) (define head (NumC-n (vector-ref s 0)))
+                                                    (cond
+                                                      [(<= (+ head n) (vector-length store))
+                                                       (for ([i (in-range head (+ head n))])
+                                                         (vector-set! store i init))
+                                                       (vector-set! store 0 (+ head n))
+                                                       (ArrV head (+ head n -1))]
+                                                      [else (error 'make-array "PAIG: Out of memory")])
+                                                    ]
+                                  [else (error 'make-array "PAIG: Illegal to create an array with fewer than one cell")]))]
+    [else (error 'make-array "PAIG: Incorrect number of arguments to 'make-array', expected 2, got ~e" (length vals))]))
+
+; given a list of values, create an array of those values
+(define (array [vals : (Listof Value)] [store : vector]) : ArrV
+  (define n (length vals))
+  (cond
+    [(> n 0) (define head (NumC-n (vector-ref s 0)))
+             (cond
+               [(<= (+ head n) (vector-length store))
+                   (for ([val vals]
+                         [i (in-range head (+ head n))])
+                     (vector-set! store i val))
+                   (vector-set! store 0 (+ head n))
+                   (ArrV head (+ head n -1))]
+               [else (error 'array "PAIG: Out of memory")])]
+    [else (error 'array "PAIG: Illegal to create an array with fewer than one cell")]))
+
+; given an array and an index, return the element at that index
+(define (aref [vals : (Listof Value)] [store : vector]) : Value
+  (cond
+    [(equal? (length vals) 2) (local ([define n (first vals)] [define init (second vals)])
+                                (cond
+                                  [(> (NumV-n n) 0) (define head (NumC-n (vector-ref s 0)))
+                                                    (cond
+                                                      [(<= (+ head n) (vector-length store))
+                                                       (for ([i (in-range head (+ head n))])
+                                                         (vector-set! store i init))
+                                                       (vector-set! store 0 (+ head n))
+                                                       (ArrV head (+ head n -1))]
+                                                      [else (error 'make-array "PAIG: Out of memory")])
+                                                    ]
+                                  [else (error 'make-array "PAIG: Illegal to create an array with fewer than one cell")]))]
+    [else (error 'aref "PAIG: Incorrect number of arguments to 'make-array', expected 2, got ~e" (length vals))]))
 
 ; top-env definition
 (define top-env (cons (Binding 'true 1)
@@ -191,22 +241,34 @@
 
 ; creates the initial store containing values for top-env names
 (define (make-initial-store [n : Natural]) : vector
-  (define store (make-vector (+ 1 13 n)))
-  ; set first element to index of first open element
-  (vector-set! store 0 14)
-  ; add top-env values
-  (vector-set! store 1 (BoolV #t))
-  (vector-set! store 2 (BoolV #f))
-  (vector-set! store 3 (PrimV top-plus))
-  (vector-set! store 4 (PrimV top-minus))
-  (vector-set! store 5 (PrimV top-mult))
-  (vector-set! store 6 (PrimV top-divide))
-  (vector-set! store 7 (PrimV top-<=))
-  (vector-set! store 8 (PrimV top-error))
-  (vector-set! store 9 (PrimV top-equal?))
+  (cond
+    [(< n 13) (error 'make-initial-store "PAIG: Out of memory")]
+    [else  (define store (make-vector (n)))
+           ; set first element to index of first open element
+           (vector-set! store 0 14)
+           ; add top-env values
+           (vector-set! store 1 (BoolV #t))
+           (vector-set! store 2 (BoolV #f))
+           (vector-set! store 3 (PrimV top-plus))
+           (vector-set! store 4 (PrimV top-minus))
+           (vector-set! store 5 (PrimV top-mult))
+           (vector-set! store 6 (PrimV top-divide))
+           (vector-set! store 7 (PrimV top-<=))
+           (vector-set! store 8 (PrimV top-error))
+           (vector-set! store 9 (PrimV top-equal?))
   
-  store
-  ))
+           store]))
+
+; add a list of values to the store at first available memory
+(define (allocate [s : vector] [vals : (Listof Value)]) : Natural
+  (define base (NumC-n (vector-ref s 0))
+  (cond
+    [(> (+ (length vals) base) (vector-length s)) (error 'allocate "PAIG: Out of memory")]
+    [else (for ([val vals]
+                [i (in-range base (+ base (length vals)))])
+            (vector-set! s i val))
+          (vector-set! s 0 (+ (length vals) base))
+          base])))
 
 
 ; ***** Serializer *****
@@ -219,8 +281,9 @@
     [(BoolV b) (cond
                  [(equal? b #t) "true"]
                  [else "false"])]
-    [(CloV a b e) "#<procedure>"]
-    [(PrimV p) "#<primop>"]))
+    [(CloV _ _ _) "#<procedure>"]
+    [(PrimV _) "#<primop>"]
+    [(ArrV _ _) "#<array>"]))
 
 
 ; ***** Parser *****
