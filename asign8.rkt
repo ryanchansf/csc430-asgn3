@@ -25,7 +25,7 @@
 ; no abstract syntax, desugared into function application in parser
 
 ; {blam {id ...} Expr} anonymous functions
-(struct BlamC([args : (Listof IdC)] [body : ExprC]) #:transparent)
+(struct BlamC([args : (Listof IdC)] [types : (Listof Type)] [body : ExprC]) #:transparent)
 
 ; {Expr Expr ...} function applications
 (struct AppC([f : ExprC] [args : (Listof ExprC)]) #:transparent)
@@ -46,7 +46,64 @@
 (struct Binding([name : Symbol] [val : Value]) #:transparent)
 (define-type Env (Listof Binding))
 
-; BUILT-IN FUNCTIONS
+
+; ***** Types ******
+(struct TBinding([name : Symbol] [type : Type]) #:transparent)
+(define-type TEnv (Listof TBinding))
+
+(define-type Type (U NumT StrT FunT))
+
+(struct NumT)
+(struct StrT)
+(struct FunT)
+
+
+; ***** Interpreter *****
+
+; given an Sexp, combine parse and evaluate, serialize final Value
+(define (top-interp [s : Sexp]) : String
+  (serialize (interp (parse s) top-env)))
+
+; given an ExprC and list of FundefCs, recursively evaluate ExprCs to resolve applications
+(define (interp [e : ExprC] [env : Env]) : Value
+  (match e
+    [(NumC n) (NumV n)]
+    [(StrC s) (StrV s)]
+    ; search env for binding
+    [(IdC s) (lookup (IdC s) env)]
+    ; evaluate conditional
+    [(CondC c t e) (local ([define c-val (interp c env)])
+                     (cond
+                       [(equal? c-val (BoolV #t)) (interp t env)]
+                       [(equal? c-val (BoolV #f)) (interp e env)]
+                       [else (error 'interp "PAIG: expected boolean value from condition, got ~e" c-val)]))]
+    ; evalute BlamC to CloV
+    [(BlamC args body) (CloV args body env)]
+    ; interp function applications into CloV, extend env based on current
+    [(AppC f vals) (local ([define f-value (interp f env)])
+                     (cond
+                       ; anonymous function application
+                       [(CloV? f-value)
+                        (cond
+                          ; ensure correct number of arguments
+                          [(equal? (length vals) (length (CloV-args f-value)))
+                           (interp (CloV-body f-value)
+                                   ; extend the env by combining arg-value bindings and closure env 
+                                   (append
+                                    (map (λ ([arg : IdC] [val : ExprC]) : Binding
+                                           (Binding (IdC-s arg) (interp val env))) (CloV-args f-value) vals)
+                                    ; since (interp f env) could add bindings, use closure's env not env
+                                    (CloV-env f-value)))]
+                          [else (error
+                                 'interp "PAIG: Incorrect number of arguments for function: \"~e\""
+                                 f-value)])]
+                       ; built-in function application
+                       [(PrimV? f-value) ((PrimV-val f-value) (map (λ ([val : ExprC]) : Value (interp val env)) vals))]
+                       ; invalid function application
+                       [else (error 'interp "PAIG: illegal function application, cannot apply ~e" f-value)]))]))
+
+
+; ***** BUILT-IN FUNCTIONS *****
 
 ; given a message, throw a user error
 (define (top-error [vals : (Listof Value)]) : Nothing
@@ -126,20 +183,6 @@
                                                                 (cons (Binding 'equal? (PrimV top-equal?)) '()))))))))))
 
 
-; ***** Serializer *****
-
-; given a PAIG5 Value, return a string
-(define (serialize [val : Value]) : String
-  (match val
-    [(NumV n) (format "~v" n)]
-    [(StrV s) (format "~v" s)]
-    [(BoolV b) (cond
-                 [(equal? b #t) "true"]
-                 [else "false"])]
-    [(CloV a b e) "#<procedure>"]
-    [(PrimV p) "#<primop>"]))
-
-
 ; ***** Parser *****
 
 ; given an Sexp, recursively map Sexp to ExprC
@@ -200,49 +243,29 @@
     [else (error 'parse-id "PAIG: expected legal id, got ~e" s)]))
 
 
-; ***** Interpreter *****
+; ***** Type Checker *****
 
-; given an Sexp, combine parse and evaluate, serialize final Value
-(define (top-interp [s : Sexp]) : String
-  (serialize (interp (parse s) top-env)))
+; given an Sexp, parse a type
+(define (parse-type [s : Sexp]) : Type
+  #f)
 
-; given an ExprC and list of FundefCs, recursively evaluate ExprCs to resolve applications
-(define (interp [e : ExprC] [env : Env]) : Value
-  (match e
-    [(NumC n) (NumV n)]
-    [(StrC s) (StrV s)]
-    ; search env for binding
-    [(IdC s) (lookup (IdC s) env)]
-    ; evaluate conditional
-    [(CondC c t e) (local ([define c-val (interp c env)])
-                     (cond
-                       [(equal? c-val (BoolV #t)) (interp t env)]
-                       [(equal? c-val (BoolV #f)) (interp e env)]
-                       [else (error 'interp "PAIG: expected boolean value from condition, got ~e" c-val)]))]
-    ; evalute BlamC to CloV
-    [(BlamC args body) (CloV args body env)]
-    ; interp function applications into CloV, extend env based on current
-    [(AppC f vals) (local ([define f-value (interp f env)])
-                     (cond
-                       ; anonymous function application
-                       [(CloV? f-value)
-                        (cond
-                          ; ensure correct number of arguments
-                          [(equal? (length vals) (length (CloV-args f-value)))
-                           (interp (CloV-body f-value)
-                                   ; extend the env by combining arg-value bindings and closure env 
-                                   (append
-                                    (map (λ ([arg : IdC] [val : ExprC]) : Binding
-                                           (Binding (IdC-s arg) (interp val env))) (CloV-args f-value) vals)
-                                    ; since (interp f env) could add bindings, use closure's env not env
-                                    (CloV-env f-value)))]
-                          [else (error
-                                 'interp "PAIG: Incorrect number of arguments for function: \"~e\""
-                                 f-value)])]
-                       ; built-in function application
-                       [(PrimV? f-value) ((PrimV-val f-value) (map (λ ([val : ExprC]) : Value (interp val env)) vals))]
-                       ; invalid function application
-                       [else (error 'interp "PAIG: illegal function application, cannot apply ~e" f-value)]))]))
+; given an ExprC and environment, type-check the expression
+(define type-check [e : ExprC] [env : TEnv] : Type
+  #f)
+
+
+; ***** Misc Functions *****
+
+; given a PAIG5 Value, return a string
+(define (serialize [val : Value]) : String
+  (match val
+    [(NumV n) (format "~v" n)]
+    [(StrV s) (format "~v" s)]
+    [(BoolV b) (cond
+                 [(equal? b #t) "true"]
+                 [else "false"])]
+    [(CloV a b e) "#<procedure>"]
+    [(PrimV p) "#<primop>"]))
 
 
 ; lookup binding in environment
