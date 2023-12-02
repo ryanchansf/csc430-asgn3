@@ -167,7 +167,7 @@
     [else (error '<= "PAIG: Incorrect number of arguments to '<=', expected 2, got ~e" (length vals))]))
 
 ; give two values l and r, return l == r or error if illegal
-(define (top-equal? [vals : (Listof Value)]) : BoolV
+(define (top-num-eq? [vals : (Listof Value)]) : BoolV
   (cond
     [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)])
                                 (cond
@@ -176,6 +176,18 @@
                                   [(and (BoolV? l) (BoolV? r)) (BoolV (equal? (BoolV-val l) (BoolV-val r)))]
                                   [else (BoolV #f)]))]
     [else (error 'equal? "PAIG: Incorrect number of arguments to 'equal', expected 2, got ~e" (length vals))]))
+
+; give two values l and r, return l == r or error if illegal
+(define (top-str-eq? [vals : (Listof Value)]) : BoolV
+  (cond
+    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)])
+                                (cond
+                                  [(and (NumV? l) (NumV? r)) (BoolV (equal? (NumV-val l) (NumV-val r)))]
+                                  [(and (StrV? l) (StrV? r)) (BoolV (equal? (StrV-val l) (StrV-val r)))]
+                                  [(and (BoolV? l) (BoolV? r)) (BoolV (equal? (BoolV-val l) (BoolV-val r)))]
+                                  [else (BoolV #f)]))]
+    [else (error 'equal? "PAIG: Incorrect number of arguments to 'equal', expected 2, got ~e" (length vals))]))
+
 
 
 ; top-env definition
@@ -187,7 +199,9 @@
                                               (cons (Binding '/ (PrimV top-divide))
                                                     (cons (Binding '<= (PrimV top-<=))
                                                           (cons (Binding 'error (PrimV top-error))
-                                                                (cons (Binding 'equal? (PrimV top-equal?)) '()))))))))))
+                                                                (cons (Binding 'num-equal? (PrimV top-num-eq?))
+                                                                      (cons (Binding 'str-equal? (PrimV top-str-eq?))
+                                                                            (cons (Binding 'substring (PrimV top-substring)) '()))))))))))))
 
 
 ; ***** Parser *****
@@ -264,7 +278,10 @@
     ; parse strings to StrT
     [(? string? s) (StrT)]
     ; parse booleans?
+    [(? boolean? b) (BoolV)]
     ; parse functions
+    [(list (? list? args) '-> ret) (FunT (map parse-type args) (parse-type ret))]
+    [other (error 'parse-type "PAIG: expected valid type, got ~e" other)]))
    
 
 ; given an ExprC and environment, type-check the expression
@@ -283,7 +300,7 @@
     ; type-check BlamC terms
     [(BlamC args types body) (cond
                                [(equal? (type-check body
-                                                    ; extend the type env by combining arg-type bindings and closure env 
+                                                    ; extend the type env by combining arg-type bindings and current env 
                                                     (append
                                                      (map (λ ([arg : IdC] [type : Type]) : TBinding
                                                             (TBinding (IdC-s arg) type)) args types)
