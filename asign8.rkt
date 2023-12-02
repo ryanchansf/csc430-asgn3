@@ -313,10 +313,14 @@
     [(StrC s) (StrT)]
     ; type-check ids
     [(IdC s) (t-lookup (IdC s) env)]
-    ; ADD TYPE CHECKING FOR NON-CONSTANTS
     ; type-check variables
     ; type-check if-expressions
     ; type-check applications
+    [(AppC f args) (local ([define f (type-check f env)])
+                     (cond
+                       [(equal? #t (fold (lambda ([t1 : Type] [t2 : Type] [res : Boolean])
+                                (and res (equal? t1 t2))) #t (FunT-args f) args)) (FunT-ret f)]
+                       [else (error 'type-check "PAIG: type mismatch between function parameters and arguments")]))]
     ; type-check BlamC terms
     [(BlamC args types body) (FunT (map type-check args env) (type-check body
                                                     ; extend the type env by combining arg-type bindings and current env 
