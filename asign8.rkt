@@ -58,9 +58,16 @@
 (struct StrT() #:transparent)
 (struct FunT ([args : (Listof Type)] [ret : Type]) #:transparent)
 
-(define base-tenv (cons (TBinding 'num (NumT))
-                        (cons (TBinding 'str (StrT))
-                              (cons (TBinding 'bool (BoolT)) '()))))
+(define base-tenv (cons (TBinding 'true (BoolT))
+                        (cons (TBinding 'false (BoolT))
+                              (cons (TBinding '+ (FunT (list (NumT) (NumT)) (NumT)))
+                                    (cons (TBinding '- (FunT (list (NumT) (NumT)) (NumT)))
+                                          (cons (TBinding '* (FunT (list (NumT) (NumT)) (NumT)))
+                                                (cons (TBinding '/ (FunT (list (NumT) (NumT)) (NumT)))
+                                                      (cons (TBinding '<= (FunT (list (NumT) (NumT)) (BoolT)))
+                                                            (cons (TBinding 'num-eq? (FunT (list (NumT) (NumT)) (BoolT)))
+                                                                  (cons (TBinding 'str-eq? (FunT (list (NumT) (NumT)) (BoolT)))
+                                                                        (cons (TBinding 'substring (FunT (list (StrT) (NumT) (NumT)) (StrT))) '())))))))))))
 
 
 ; ***** Interpreter *****
@@ -166,27 +173,23 @@
                                   [else (error '<= "PAIG: non-number operands to (<= a b) → boolean")]))]
     [else (error '<= "PAIG: Incorrect number of arguments to '<=', expected 2, got ~e" (length vals))]))
 
-; give two values l and r, return l == r or error if illegal
+; give two values l and r, return l == r and l is num and r is num, or error if illegal
 (define (top-num-eq? [vals : (Listof Value)]) : BoolV
   (cond
     [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)])
                                 (cond
                                   [(and (NumV? l) (NumV? r)) (BoolV (equal? (NumV-val l) (NumV-val r)))]
-                                  [(and (StrV? l) (StrV? r)) (BoolV (equal? (StrV-val l) (StrV-val r)))]
-                                  [(and (BoolV? l) (BoolV? r)) (BoolV (equal? (BoolV-val l) (BoolV-val r)))]
                                   [else (BoolV #f)]))]
-    [else (error 'equal? "PAIG: Incorrect number of arguments to 'equal', expected 2, got ~e" (length vals))]))
+    [else (error 'num-eq? "PAIG: Incorrect number of arguments to 'num-equal', expected 2, got ~e" (length vals))]))
 
-; give two values l and r, return l == r or error if illegal
+; give two values l and r, return l == r and l is str and r is str, or error if illegal
 (define (top-str-eq? [vals : (Listof Value)]) : BoolV
   (cond
     [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)])
                                 (cond
-                                  [(and (NumV? l) (NumV? r)) (BoolV (equal? (NumV-val l) (NumV-val r)))]
                                   [(and (StrV? l) (StrV? r)) (BoolV (equal? (StrV-val l) (StrV-val r)))]
-                                  [(and (BoolV? l) (BoolV? r)) (BoolV (equal? (BoolV-val l) (BoolV-val r)))]
                                   [else (BoolV #f)]))]
-    [else (error 'equal? "PAIG: Incorrect number of arguments to 'equal', expected 2, got ~e" (length vals))]))
+    [else (error 'str-eq? "PAIG: Incorrect number of arguments to 'str-equal', expected 2, got ~e" (length vals))]))
 
 
 
@@ -198,10 +201,9 @@
                                         (cons (Binding '* (PrimV top-mult))
                                               (cons (Binding '/ (PrimV top-divide))
                                                     (cons (Binding '<= (PrimV top-<=))
-                                                          (cons (Binding 'error (PrimV top-error))
                                                                 (cons (Binding 'num-equal? (PrimV top-num-eq?))
                                                                       (cons (Binding 'str-equal? (PrimV top-str-eq?))
-                                                                            (cons (Binding 'substring (PrimV top-substring)) '()))))))))))))
+                                                                            (cons (Binding 'substring (PrimV top-substring)) '())))))))))))
 
 
 ; ***** Parser *****
@@ -219,17 +221,23 @@
     [(list c '? t 'else: e) (CondC (parse c) (parse t) (parse e))]
     ; parse functions to BlamC
     [(list 'blam (? list? args) body)
-     (cond
-       [(equal? #f (check-duplicates args)) (BlamC (map parse-id (cast args (Listof Sexp))) (parse body))]
-       [else (error 'parse "PAIG: duplicate arguments: ~e" args)])]
+     (match args
+       [(list (list id ': type) ...)
+        (local ([define blam-args (map blam-arg (cast args (Listof (Listof Sexp))))])
+          (cond
+            [(equal? (check-duplicates blam-args) #f) (BlamC blam-args
+                                                             (map blam-type (cast args (Listof (Listof Sexp))))
+                                                             (parse body))]
+            [else (error 'parse "PAIG: duplicate vars in ~e" with-vars)]))]
+       [other (error 'parse "expected legal expression, got ~e" other)])]
     ; desugar with to AppC and BlamC
     [(list 'with (? list? locals) ... ': body)
-     (local ([define with-vars (map desugar-id (cast locals (Listof (Listof Sexp))))])
+     (local ([define with-vars (map with-id (cast locals (Listof (Listof Sexp))))])
        (cond
          [(equal? (check-duplicates with-vars) #f) (AppC (BlamC
                                                           with-vars
                                                           (parse body))
-                                                         (map desugar-expr (cast locals (Listof (Listof Sexp)))))]
+                                                         (map with-expr (cast locals (Listof (Listof Sexp)))))]
          [else (error 'parse "PAIG: duplicate vars in ~e" with-vars)])
        )]
     ; parse function applications to AppC
@@ -238,16 +246,28 @@
     [other (error 'parse "PAIG: expected legal expression, got ~e" other)]))
 
 ; desugar with local expr to ExprC
-(define (desugar-expr [local : (Listof Sexp)]) : ExprC
+(define (with-expr [local : (Listof Sexp)]) : ExprC
   (match local
     [(list expr 'as _) (parse expr)]))
 ; invalid with clause always caught in desugar-id
 
 ; desugar with local id to IdC
-(define (desugar-id [local : (Listof Sexp)]) : IdC
+(define (with-id [local : (Listof Sexp)]) : IdC
   (match local
     [(list _ 'as id) (parse-id id)]
-    [other (error 'desugar-id "PAIG: expected valid with clause, got ~e" other)]))
+    [other (error 'with-id "PAIG: expected valid with clause, got ~e" other)]))
+
+; parse blam arg to IdC
+(define (blam-arg [param : (Listof Sexp)]) : ExprC
+  (match param
+    [(list id ': _) (parse-id id)]
+    [other (error 'blam-arg "PAIG: expected valid blam argument, got ~e" other)]))
+
+; parse blam arg type to Type
+(define (blam-type [param : (Listof Sexp)]) : ExprC
+  (match param
+    [(list _ ': type) (parse-type type)]
+    [other (error 'blam-arg "PAIG: expected valid blam argument, got ~e" other)]))
 
 ; given an Sexp, check Sexp against taken ids and parse symbol to IdC
 (define (parse-id [s : Sexp]) : IdC
@@ -274,18 +294,18 @@
 (define (parse-type [s : Sexp]) : Type
   (match s
     ; parse real numbers to type NumT
-    [(? real? n) (NumT)]
+    ['num (NumT)]
     ; parse strings to StrT
-    [(? string? s) (StrT)]
+    ['str (StrT)]
     ; parse booleans?
-    [(? boolean? b) (BoolV)]
+    ['bool (BoolT)]
     ; parse functions
     [(list (? list? args) '-> ret) (FunT (map parse-type args) (parse-type ret))]
     [other (error 'parse-type "PAIG: expected valid type, got ~e" other)]))
    
 
 ; given an ExprC and environment, type-check the expression
-(define type-check [e : ExprC] [env : TEnv] : Type
+(define (type-check [e : ExprC] [env : TEnv]) : Type
   (match e
     ; type-check num
     [(NumC n) (NumT)]
@@ -298,16 +318,14 @@
     ; type-check if-expressions
     ; type-check applications
     ; type-check BlamC terms
-    [(BlamC args types body) (cond
-                               [(equal? (type-check body
+    [(BlamC args types body) (FunT (map type-check args env) (type-check body
                                                     ; extend the type env by combining arg-type bindings and current env 
                                                     (append
                                                      (map (λ ([arg : IdC] [type : Type]) : TBinding
                                                             (TBinding (IdC-s arg) type)) args types)
-                                                     env)))])]
+                                                     env)))]
     ; type-check var and rec terms
-    
-    ))
+    )) 
 
 
 ; lookup binding in type environment
@@ -411,7 +429,7 @@
            (lambda () (top-interp '{<= 3 5 2})))
 (check-exn (regexp (regexp-quote "equal?"))
            (lambda () (top-interp '{equal? 3 3 3})))
-(check-exn (regexp (regexp-quote "desugar-id"))
+(check-exn (regexp (regexp-quote "with-id"))
            (lambda () (top-interp '{with [{blam (x) {+ x 1}} as f f] : {f 2}})))
 (check-exn (regexp (regexp-quote "parse-id"))
            (lambda () (top-interp '{with [{blam (?) {+ x 1}} as f] : {f 2}})))
