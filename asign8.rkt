@@ -51,18 +51,25 @@
 (struct TBinding([name : Symbol] [type : Type]) #:transparent)
 (define-type TEnv (Listof TBinding))
 
-(define-type Type (U NumT StrT FunT))
+(define-type Type (U NumT BoolT StrT FunT))
 
-(struct NumT)
-(struct StrT)
-(struct FunT)
+(struct NumT() #:transparent)
+(struct BoolT() #:transparent)
+(struct StrT() #:transparent)
+(struct FunT ([args : (Listof Type)] [ret : Type]) #:transparent)
+
+(define base-tenv (cons (TBinding 'num (NumT))
+                        (cons (TBinding 'str (StrT))
+                              (cons (TBinding 'bool (BoolT)) '()))))
 
 
 ; ***** Interpreter *****
 
 ; given an Sexp, combine parse and evaluate, serialize final Value
 (define (top-interp [s : Sexp]) : String
-  (serialize (interp (parse s) top-env)))
+  (define expr (parse s))
+  (type-check expr base-tenv)
+  (serialize (interp expr top-env)))
 
 ; given an ExprC and list of FundefCs, recursively evaluate ExprCs to resolve applications
 (define (interp [e : ExprC] [env : Env]) : Value
@@ -236,7 +243,11 @@
          (equal? s 'else:)
          (equal? s 'with) 
          (equal? s 'as)
-         (equal? s 'blam)) (error 'parse-id "PAIG: expected legal id, got ~e" s)]
+         (equal? s 'blam)
+         (equal? s ':)
+         (equal? s 'rec)
+         (equal? s '->)
+         (equal? s 'returning)) (error 'parse-id "PAIG: expected legal id, got ~e" s)]
     ; legal id
     [(symbol? s) (IdC s)]
     ; catch illegal ids
@@ -247,12 +258,50 @@
 
 ; given an Sexp, parse a type
 (define (parse-type [s : Sexp]) : Type
-  #f)
+  (match s
+    ; parse real numbers to type NumT
+    [(? real? n) (NumT)]
+    ; parse strings to StrT
+    [(? string? s) (StrT)]
+    ; parse booleans?
+    ; parse functions
+   
 
 ; given an ExprC and environment, type-check the expression
 (define type-check [e : ExprC] [env : TEnv] : Type
-  #f)
+  (match e
+    ; type-check num
+    [(NumC n) (NumT)]
+    ; type-check string
+    [(StrC s) (StrT)]
+    ; type-check ids
+    [(IdC s) (t-lookup (IdC s) env)]
+    ; ADD TYPE CHECKING FOR NON-CONSTANTS
+    ; type-check variables
+    ; type-check if-expressions
+    ; type-check applications
+    ; type-check BlamC terms
+    [(BlamC args types body) (cond
+                               [(equal? (type-check body
+                                                    ; extend the type env by combining arg-type bindings and closure env 
+                                                    (append
+                                                     (map (λ ([arg : IdC] [type : Type]) : TBinding
+                                                            (TBinding (IdC-s arg) type)) args types)
+                                                     env)))])]
+    ; type-check var and rec terms
+    
+    ))
 
+
+; lookup binding in type environment
+(define (t-lookup [s : IdC] [env : TEnv]) : Type
+  (match env
+    ; binding doesn't exist
+    ['() (error 't-lookup "PAIG: name not found: ~e" (IdC-s s))]
+    [(cons (TBinding name type) r) (cond
+                                     [(symbol=? (IdC-s s) name) type]
+                                     [else (t-lookup s r)])]))
+    
 
 ; ***** Misc Functions *****
 
