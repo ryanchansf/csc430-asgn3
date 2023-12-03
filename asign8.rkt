@@ -91,10 +91,9 @@
     [(IdC s) (unbox (lookup (IdC s) env))]
     ; evaluate conditional
     [(CondC c t e) (local ([define c-val (interp c env)])
-                     (cond
-                       [(equal? c-val (BoolV #t)) (interp t env)]
-                       [(equal? c-val (BoolV #f)) (interp e env)]
-                       [else (error 'interp "PAIG: expected boolean value from condition, got ~e" c-val)]))]
+                     (match c-val
+                       [(BoolV #t) (interp t env)]
+                       [(BoolV #f) (interp e env)]))]
     ; evalute BlamC to CloV
     [(BlamC args types body) (CloV args body env)]
     ; interp function applications into CloV, extend env based on current
@@ -102,9 +101,6 @@
                      (cond
                        ; anonymous function application
                        [(CloV? f-value)
-                        (cond
-                          ; ensure correct number of arguments
-                          [(equal? (length vals) (length (CloV-args f-value)))
                            (interp (CloV-body f-value)
                                    ; extend the env by combining arg-value bindings and closure env 
                                    (append
@@ -112,9 +108,6 @@
                                            (Binding (IdC-s arg) (box-Value (interp val env)))) (CloV-args f-value) vals)
                                     ; since (interp f env) could add bindings, use closure's env not env
                                     (CloV-env f-value)))]
-                          [else (error
-                                 'interp "PAIG: Incorrect number of arguments for function: \"~e\""
-                                 f-value)])]
                        ; built-in function application
                        [(PrimV? f-value) ((PrimV-val f-value) (map (λ ([val : ExprC]) : Value (interp val env)) vals))]
                        ; invalid function application
@@ -129,76 +122,59 @@
 
 ; given two values, add them together or error if illegal
 (define (top-plus [vals : (Listof Value)]) : NumV
-  (cond
-    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)])
+  (local ([define l (first vals)] [define r (second vals)])
                                 (cond
                                   [(and (NumV? l) (NumV? r)) (NumV (+ (NumV-val l) (NumV-val r)))]
-                                  [else (error '+ "PAIG: non-number operands to (+ a b) → real")]))]
-    [else (error '+ "PAIG: Incorrect number of arguments to '+', expected 2, got ~e" (length vals))]))
+                                  [else (error '+ "PAIG: non-number operands to (+ a b) → real")])))
 
 ; given two values, subtract them or error if illegal
 (define (top-minus [vals : (Listof Value)]) : NumV
-  (cond
-    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)])
+  (local ([define l (first vals)] [define r (second vals)])
                                 (cond
                                   [(and (NumV? l) (NumV? r)) (NumV (- (NumV-val l) (NumV-val r)))]
-                                  [else (error '- "PAIG: non-number operands to (- a b) → real")]))]
-    [else (error '- "PAIG: Incorrect number of arguments to '-', expected 2, got ~e" (length vals))]))
+                                  [else (error '- "PAIG: non-number operands to (- a b) → real")])))
 
 ; given two values, multiply them together or error if illegal
 (define (top-mult [vals : (Listof Value)]) : NumV
-  (cond
-    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)])
+  (local ([define l (first vals)] [define r (second vals)])
                                 (cond
                                   [(and (NumV? l) (NumV? r)) (NumV (* (NumV-val l) (NumV-val r)))]
-                                  [else (error '* "PAIG: non-number operands to (* a b) → real")]))]
-    [else (error '* "PAIG: Incorrect number of arguments to '*', expected 2, got ~e" (length vals))]))
+                                  [else (error '* "PAIG: non-number operands to (* a b) → real")])))
 
 ; given two values, divide them or error if illegal
 (define (top-divide [vals : (Listof Value)]) : NumV
-  (cond
-    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)])
+  (local ([define l (first vals)] [define r (second vals)])
                                 (cond
                                   [(and (NumV? l) (NumV? r))
                                    (cond
                                      [(equal? (NumV-val r) 0) (error '/ "PAIG: illegal divide by 0")]
                                      [else (NumV (/ (NumV-val l) (NumV-val r)))])]
-                                  [else (error '/ "PAIG: non-number operands to (/ a b) → real")]))]
-    [else (error '/ "PAIG: Incorrect number of arguments to '/', expected 2, got ~e" (length vals))]))
+                                  [else (error '/ "PAIG: non-number operands to (/ a b) → real")])))
 
 ; given two values l and r, return l <= r or error if illegal
 (define (top-<= [vals : (Listof Value)]) : BoolV
-  (cond
-    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)])
+  (local ([define l (first vals)] [define r (second vals)])
                                 (cond
                                   [(and (NumV? l) (NumV? r)) (BoolV (<= (NumV-val l) (NumV-val r)))]
-                                  [else (error '<= "PAIG: non-number operands to (<= a b) → boolean")]))]
-    [else (error '<= "PAIG: Incorrect number of arguments to '<=', expected 2, got ~e" (length vals))]))
+                                  [else (error '<= "PAIG: non-number operands to (<= a b) → boolean")])))
 
 ; give two values l and r, return l == r and l is num and r is num, or error if illegal
 (define (top-num-eq? [vals : (Listof Value)]) : BoolV
-  (cond
-    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)])
+  (local ([define l (first vals)] [define r (second vals)])
                                 (cond
                                   [(and (NumV? l) (NumV? r)) (BoolV (equal? (NumV-val l) (NumV-val r)))]
-                                  [else (BoolV #f)]))]
-    [else (error 'num-eq? "PAIG: Incorrect number of arguments to 'num-equal', expected 2, got ~e" (length vals))]))
+                                  [else (BoolV #f)])))
 
 ; give two values l and r, return l == r and l is str and r is str, or error if illegal
 (define (top-str-eq? [vals : (Listof Value)]) : BoolV
-  (cond
-    [(equal? (length vals) 2) (local ([define l (first vals)] [define r (second vals)])
+  (local ([define l (first vals)] [define r (second vals)])
                                 (cond
                                   [(and (StrV? l) (StrV? r)) (BoolV (equal? (StrV-val l) (StrV-val r)))]
-                                  [else (BoolV #f)]))]
-    [else (error 'str-eq? "PAIG: Incorrect number of arguments to 'str-equal', expected 2, got ~e" (length vals))]))
+                                  [else (BoolV #f)])))
 
 
 ; given a string, start, and end position, return the corresponding substring
 (define (top-substring [vals : (Listof Value)]) : StrV
-  (cond
-    ; make sure exactly three arguments were passed to substring
-    [(equal? (length vals) 3)
      (local ([define str (first vals)] [define start (second vals)] [define end (third vals)])
        (cond
          ; check types of input values
@@ -215,9 +191,7 @@
            (<= (NumV-val end) (string-length (StrV-val str)))
            ; return substring
            (StrV (substring (StrV-val str) (NumV-val start) (NumV-val end))))]
-         [else (error 'substring "PAIG: String index out of bounds")]))]
-    [else
-     (error 'substring "PAIG: Incorrect number of arguments to 'substring', expected 3, got ~e" (length vals))]))
+         [else (error 'substring "PAIG: String index out of bounds")])))
 
 
 ; top-env definition
@@ -299,14 +273,14 @@
 ; parse blam arg to IdC
 (define (blam-arg [param : (Listof Sexp)]) : IdC
   (match param
-    [(list id ': _) (parse-id id)]
-    [other (error 'blam-arg "PAIG: expected valid blam argument, got ~e" other)]))
+    [(list id ': _) (parse-id id)]))
+; invalid blam param caught in parse
 
 ; parse blam arg type to Type
 (define (blam-type [param : (Listof Sexp)]) : Type
   (match param
-    [(list _ ': type) (parse-type type)]
-    [other (error 'blam-arg "PAIG: expected valid blam argument, got ~e" other)]))
+    [(list _ ': type) (parse-type type)]))
+; invalid blam param caught in parse
 
 ; given an Sexp, check Sexp against taken ids and parse symbol to IdC
 (define (parse-id [s : Sexp]) : IdC
@@ -410,8 +384,7 @@
 ; lookup binding in environment
 (define (lookup [s : IdC] [env : Env]) : (Boxof Value)
   (match env
-    ; binding doesn't exist
-    ['() (error 'lookup "PAIG: name not found: ~e" (IdC-s s))]
+    ; t-lookup will catch invalid ids
     [(cons (Binding name box) r) (cond
                                    [(symbol=? (IdC-s s) name) box]
                                    [else (lookup s r)])]))
@@ -458,52 +431,49 @@
 (check-equal? (top-interp '{{blam ([three : {-> num}]) {three}} {{blam ([x : {num num -> num}]) {blam () {x 1 2}}} {blam ([x : num] [y : num]) {+ x y}}}}) "3")
 
 ; errors
-(check-exn (regexp (regexp-quote "user-error"))
-           (lambda () (top-interp '{error "checking user calling an error"})))
-(check-exn (regexp (regexp-quote "error"))
-           (lambda () (top-interp '{error})))
-(check-exn (regexp (regexp-quote "+"))
+(check-exn (regexp (regexp-quote "type-check"))
            (lambda () (top-interp '{+ 3})))
-(check-exn (regexp (regexp-quote "+"))
-           (lambda () (top-interp '{+ 5 "hello"})))
-(check-exn (regexp (regexp-quote "-"))
-           (lambda () (top-interp '{- 3})))
-(check-exn (regexp (regexp-quote "-"))
+(check-exn (regexp (regexp-quote "type-check"))
            (lambda () (top-interp '{- 5 "hello"})))
-(check-exn (regexp (regexp-quote "*"))
-           (lambda () (top-interp '{* 3 5 2})))
-(check-exn (regexp (regexp-quote "*"))
-           (lambda () (top-interp '{* 3 "hello"})))
-(check-exn (regexp (regexp-quote "/"))
-           (lambda () (top-interp '{/ 3 5 2})))
 (check-exn (regexp (regexp-quote "/"))
            (lambda () (top-interp '{/ 3 0})))
-(check-exn (regexp (regexp-quote "/"))
-           (lambda () (top-interp '{/ 3 "hello"})))
-(check-exn (regexp (regexp-quote "<="))
-           (lambda () (top-interp '{<= 3 "hello"})))
-(check-exn (regexp (regexp-quote "<="))
-           (lambda () (top-interp '{<= 3 5 2})))
-(check-exn (regexp (regexp-quote "equal?"))
-           (lambda () (top-interp '{equal? 3 3 3})))
 (check-exn (regexp (regexp-quote "with-id"))
-           (lambda () (top-interp '{with [{blam (x) {+ x 1}} as f f] : {f 2}})))
-(check-exn (regexp (regexp-quote "parse-id"))
+           (lambda () (top-interp '{with [{blam ([x : num]) {+ x 1}} as f f] : {f 2}})))
+(check-exn (regexp (regexp-quote "with-id"))
            (lambda () (top-interp '{with [{blam (?) {+ x 1}} as f] : {f 2}})))
 (check-exn (regexp (regexp-quote "lookup"))
-           (lambda () (top-interp '{equal? f 3 3})))
-(check-exn (regexp (regexp-quote "interp"))
-           (lambda () (top-interp '{{blam (x) {+ x 1}} 3 4})))
-(check-exn (regexp (regexp-quote "interp"))
+           (lambda () (top-interp '{num-eq? f 3})))
+(check-exn (regexp (regexp-quote "type-check"))
+           (lambda () (top-interp '{{blam ([x : num]) {+ x 1}} 3 4})))
+(check-exn (regexp (regexp-quote "type-check"))
            (lambda () (top-interp '{3 4})))
-(check-exn (regexp (regexp-quote "interp"))
+(check-exn (regexp (regexp-quote "type-check"))
            (lambda () (top-interp '{3 ? 4 else: 5})))
 (check-exn (regexp (regexp-quote "parse"))
            (lambda () (top-interp '{#f})))
-(check-exn (regexp (regexp-quote "parse-id"))
+(check-exn (regexp (regexp-quote "parse"))
            (lambda () (top-interp '{{blam ({x}) {+ x 1}} 3})))
 (check-exn (regexp (regexp-quote "parse"))
            (lambda () (top-interp '{blam (x x) 3})))
 (check-exn (regexp (regexp-quote "parse"))
-           (lambda () (parse '{with [(blam () 3) as z] [9 as z] : (z)})))
+           (lambda () (parse '{with [(blam () 3) as z : {-> num}] [9 as z : num] : (z)})))
+(check-exn (regexp (regexp-quote "lookup"))
+           (lambda () (top-interp '{+ x 3})))
+(check-exn (regexp (regexp-quote "type-check"))
+           (lambda () (top-interp '{{<= 2 4} ? 3 else: "hi"})))
+(check-exn (regexp (regexp-quote "parse-type"))
+           (lambda () (top-interp '{{blam ([x : wrong]) {+ x 1}} 3})))
+(check-exn (regexp (regexp-quote "parse-id"))
+           (lambda () (top-interp '{{blam ([rec : num]) {+ x 1}} 3})))
+(check-exn (regexp (regexp-quote "parse"))
+           (lambda () (top-interp '{{blam ([x : num] [x : num]) {+ x 1}} 3})))
+(check-exn (regexp (regexp-quote "parse"))
+           (lambda () (top-interp '{rec [{+ 1 2}
+                                 as square-helper returning num]
+                             :
+                             {with [{blam {[n : num]} {square-helper {- {* 2 n} 1}}}
+                                    as square : {num -> num}]
+                                   :
+                                   {square 12}}})))
+
 
