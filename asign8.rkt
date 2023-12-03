@@ -315,12 +315,21 @@
     [(IdC s) (t-lookup (IdC s) env)]
     ; type-check variables
     ; type-check if-expressions
+    [(CondC if then else) (cond
+                            [(equal? (BoolT) (type-check if env)) (local ([define then-type (type-check then env)])
+                                                                    (cond
+                                                                      [(equal? then-type (type-check else env)) then-type]
+                                                                      [else (error 'type-check "PAIG: then and else expressions should have same type")]))]
+                            [else (error 'type-check "PAIG: expected boolean condition to if")])]
     ; type-check applications
     [(AppC f args) (local ([define f (type-check f env)])
                      (cond
-                       [(equal? #t (fold (lambda ([t1 : Type] [t2 : Type] [res : Boolean])
-                                (and res (equal? t1 t2))) #t (FunT-args f) args)) (FunT-ret f)]
-                       [else (error 'type-check "PAIG: type mismatch between function parameters and arguments")]))]
+                       [(equal? (length (FunT-args f)) (length args)) (cond
+                                                                        [(equal? #t (fold (lambda ([t1 : Type] [t2 : Type] [res : Boolean])
+                                                                                            (and res (equal? t1 t2))) #t (FunT-args f) args)) (FunT-ret f)]
+                                                                        [else (error 'type-check "PAIG: type mismatch between function parameters and arguments")])]
+                       [else (error 'type-check "PAIG: Incorrect number of arguments to function" f)]
+                       ))]
     ; type-check BlamC terms
     [(BlamC args types body) (FunT (map type-check args env) (type-check body
                                                     ; extend the type env by combining arg-type bindings and current env 
