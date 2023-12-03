@@ -6,7 +6,7 @@
 
 ; ***** Abstract Syntax *****
 
-(define-type ExprC (U NumC IdC StrC CondC BlamC AppC))
+(define-type ExprC (U NumC IdC StrC CondC BlamC AppC RecC Type))
 
 ; EXPR
 ; num
@@ -30,6 +30,9 @@
 ; {Expr Expr ...} function applications
 (struct AppC([f : ExprC] [args : (Listof ExprC)]) #:transparent)
 
+; {rec [{blam {[id : ty] ...} expr} as id returning ty] : expr} recursion
+(struct RecC([f : BlamC] [name : IdC] [ret : Type] [body : ExprC]) #:transparent)
+
 
 ; ***** Values *****
 (define-type Value (U NumV StrV BoolV CloV PrimV))
@@ -43,7 +46,8 @@
 
 ; ***** Environments *****
 
-(struct Binding([name : Symbol] [val : Value]) #:transparent)
+(define box-Value (inst box Value))
+(struct Binding([name : Symbol] [val : (Boxof Value)]) #:transparent)
 (define-type Env (Listof Binding))
 
 
@@ -66,7 +70,7 @@
                                                 (cons (TBinding '/ (FunT (list (NumT) (NumT)) (NumT)))
                                                       (cons (TBinding '<= (FunT (list (NumT) (NumT)) (BoolT)))
                                                             (cons (TBinding 'num-eq? (FunT (list (NumT) (NumT)) (BoolT)))
-                                                                  (cons (TBinding 'str-eq? (FunT (list (NumT) (NumT)) (BoolT)))
+                                                                  (cons (TBinding 'str-eq? (FunT (list (StrT) (StrT)) (BoolT)))
                                                                         (cons (TBinding 'substring (FunT (list (StrT) (NumT) (NumT)) (StrT))) '())))))))))))
 
 
@@ -84,7 +88,7 @@
     [(NumC n) (NumV n)]
     [(StrC s) (StrV s)]
     ; search env for binding
-    [(IdC s) (lookup (IdC s) env)]
+    [(IdC s) (unbox (lookup (IdC s) env))]
     ; evaluate conditional
     [(CondC c t e) (local ([define c-val (interp c env)])
                      (cond
@@ -92,7 +96,7 @@
                        [(equal? c-val (BoolV #f)) (interp e env)]
                        [else (error 'interp "PAIG: expected boolean value from condition, got ~e" c-val)]))]
     ; evalute BlamC to CloV
-    [(BlamC args body) (CloV args body env)]
+    [(BlamC args types body) (CloV args body env)]
     ; interp function applications into CloV, extend env based on current
     [(AppC f vals) (local ([define f-value (interp f env)])
                      (cond
@@ -105,7 +109,7 @@
                                    ; extend the env by combining arg-value bindings and closure env 
                                    (append
                                     (map (λ ([arg : IdC] [val : ExprC]) : Binding
-                                           (Binding (IdC-s arg) (interp val env))) (CloV-args f-value) vals)
+                                           (Binding (IdC-s arg) (box-Value (interp val env)))) (CloV-args f-value) vals)
                                     ; since (interp f env) could add bindings, use closure's env not env
                                     (CloV-env f-value)))]
                           [else (error
@@ -114,16 +118,14 @@
                        ; built-in function application
                        [(PrimV? f-value) ((PrimV-val f-value) (map (λ ([val : ExprC]) : Value (interp val env)) vals))]
                        ; invalid function application
-                       [else (error 'interp "PAIG: illegal function application, cannot apply ~e" f-value)]))]))
+                       [else (error 'interp "PAIG: illegal function application, cannot apply ~e" f-value)]))]
+    [(RecC f name type body) (local ([define new-env (append (list (Binding (IdC-s name) (box-Value (NumV 0)))) env)])
+                             (define f-clo (CloV (BlamC-args f) (BlamC-body f) new-env))
+                             (set-box! (lookup name new-env) f-clo)
+                             (interp body new-env))]))
 
 
 ; ***** BUILT-IN FUNCTIONS *****
-
-; given a message, throw a user error
-(define (top-error [vals : (Listof Value)]) : Nothing
-  (cond
-    [(equal? (length vals) 1) (error 'user-error "PAIG: user-error: ~e" (serialize (first vals)))]
-    [else (error 'error "PAIG: Incorrect number of arguments to error, expected 1, got ~e" (length vals))]))
 
 ; given two values, add them together or error if illegal
 (define (top-plus [vals : (Listof Value)]) : NumV
@@ -192,18 +194,43 @@
     [else (error 'str-eq? "PAIG: Incorrect number of arguments to 'str-equal', expected 2, got ~e" (length vals))]))
 
 
+; given a string, start, and end position, return the corresponding substring
+(define (top-substring [vals : (Listof Value)]) : StrV
+  (cond
+    ; make sure exactly three arguments were passed to substring
+    [(equal? (length vals) 3)
+     (local ([define str (first vals)] [define start (second vals)] [define end (third vals)])
+       (cond
+         ; check types of input values
+         [(or
+           (not (and (StrV? str) (NumV? start) (NumV? end)))
+           (not (exact-integer? (NumV-val start)))
+           (not (exact-integer? (NumV-val end))))
+          (error 'substring "PAIG: 'substring' expects string and two integer indices")]
+         ; check that end is greater than or equal to start
+         [(< (NumV-val end) (NumV-val start)) (error 'substring "PAIG: End index cannot be less than start")]
+         ; check that start and end are both less than or equal to the string length
+         [(and
+           (<= (NumV-val start) (string-length (StrV-val str)))
+           (<= (NumV-val end) (string-length (StrV-val str)))
+           ; return substring
+           (StrV (substring (StrV-val str) (NumV-val start) (NumV-val end))))]
+         [else (error 'substring "PAIG: String index out of bounds")]))]
+    [else
+     (error 'substring "PAIG: Incorrect number of arguments to 'substring', expected 3, got ~e" (length vals))]))
+
 
 ; top-env definition
-(define top-env (cons (Binding 'true (BoolV #t))
-                      (cons (Binding 'false (BoolV #f))
-                            (cons (Binding '+ (PrimV top-plus))
-                                  (cons (Binding '- (PrimV top-minus))
-                                        (cons (Binding '* (PrimV top-mult))
-                                              (cons (Binding '/ (PrimV top-divide))
-                                                    (cons (Binding '<= (PrimV top-<=))
-                                                                (cons (Binding 'num-equal? (PrimV top-num-eq?))
-                                                                      (cons (Binding 'str-equal? (PrimV top-str-eq?))
-                                                                            (cons (Binding 'substring (PrimV top-substring)) '())))))))))))
+(define top-env (cons (Binding 'true (box-Value (BoolV #t)))
+                      (cons (Binding 'false (box-Value (BoolV #f)))
+                            (cons (Binding '+ (box-Value (PrimV top-plus)))
+                                  (cons (Binding '- (box-Value (PrimV top-minus)))
+                                        (cons (Binding '* (box-Value (PrimV top-mult)))
+                                              (cons (Binding '/ (box-Value (PrimV top-divide)))
+                                                    (cons (Binding '<= (box-Value (PrimV top-<=)))
+                                                                (cons (Binding 'num-eq? (box-Value (PrimV top-num-eq?)))
+                                                                      (cons (Binding 'str-eq? (box-Value (PrimV top-str-eq?)))
+                                                                            (cons (Binding 'substring (box-Value (PrimV top-substring))) '())))))))))))
 
 
 ; ***** Parser *****
@@ -228,7 +255,7 @@
             [(equal? (check-duplicates blam-args) #f) (BlamC blam-args
                                                              (map blam-type (cast args (Listof (Listof Sexp))))
                                                              (parse body))]
-            [else (error 'parse "PAIG: duplicate vars in ~e" with-vars)]))]
+            [else (error 'parse "PAIG: duplicate vars in ~e" blam-args)]))]
        [other (error 'parse "expected legal expression, got ~e" other)])]
     ; desugar with to AppC and BlamC
     [(list 'with (? list? locals) ... ': body)
@@ -236,10 +263,16 @@
        (cond
          [(equal? (check-duplicates with-vars) #f) (AppC (BlamC
                                                           with-vars
+                                                          (map with-type (cast locals (Listof (Listof Sexp))))
                                                           (parse body))
                                                          (map with-expr (cast locals (Listof (Listof Sexp)))))]
          [else (error 'parse "PAIG: duplicate vars in ~e" with-vars)])
        )]
+    ; parse recursion to RecC
+    [(list 'rec (list f 'as name 'returning type) ': body) (local ([define fun (parse f)])
+                                                             (cond
+                                                               [(BlamC? fun) (RecC fun (parse-id name) (parse-type type) (parse body))]
+                                                               [else (error 'parse "PAIG: recursive function must be a function")]))]
     ; parse function applications to AppC
     [(cons f (? list? r)) (AppC (parse f) (map parse r))]
     ; catch illegal expressions
@@ -248,23 +281,29 @@
 ; desugar with local expr to ExprC
 (define (with-expr [local : (Listof Sexp)]) : ExprC
   (match local
-    [(list expr 'as _) (parse expr)]))
+    [(list expr 'as _ ': _) (parse expr)]))
 ; invalid with clause always caught in desugar-id
 
 ; desugar with local id to IdC
 (define (with-id [local : (Listof Sexp)]) : IdC
   (match local
-    [(list _ 'as id) (parse-id id)]
+    [(list _ 'as id ': _) (parse-id id)]
     [other (error 'with-id "PAIG: expected valid with clause, got ~e" other)]))
 
+; desugar with local type to Type
+(define (with-type [local : (Listof Sexp)]) : Type
+  (match local
+    [(list _ 'as _ ': type) (parse-type type)]))
+; invalid with clause always caught in desugar-id
+
 ; parse blam arg to IdC
-(define (blam-arg [param : (Listof Sexp)]) : ExprC
+(define (blam-arg [param : (Listof Sexp)]) : IdC
   (match param
     [(list id ': _) (parse-id id)]
     [other (error 'blam-arg "PAIG: expected valid blam argument, got ~e" other)]))
 
 ; parse blam arg type to Type
-(define (blam-type [param : (Listof Sexp)]) : ExprC
+(define (blam-type [param : (Listof Sexp)]) : Type
   (match param
     [(list _ ': type) (parse-type type)]
     [other (error 'blam-arg "PAIG: expected valid blam argument, got ~e" other)]))
@@ -300,9 +339,9 @@
     ; parse booleans?
     ['bool (BoolT)]
     ; parse functions
-    [(list (? list? args) '-> ret) (FunT (map parse-type args) (parse-type ret))]
+    [(list args ... '-> ret) 
+     (FunT (map parse-type (cast args (Listof Sexp))) (parse-type ret))]
     [other (error 'parse-type "PAIG: expected valid type, got ~e" other)]))
-   
 
 ; given an ExprC and environment, type-check the expression
 (define (type-check [e : ExprC] [env : TEnv]) : Type
@@ -313,7 +352,6 @@
     [(StrC s) (StrT)]
     ; type-check ids
     [(IdC s) (t-lookup (IdC s) env)]
-    ; type-check variables
     ; type-check if-expressions
     [(CondC if then else) (cond
                             [(equal? (BoolT) (type-check if env)) (local ([define then-type (type-check then env)])
@@ -322,23 +360,27 @@
                                                                       [else (error 'type-check "PAIG: then and else expressions should have same type")]))]
                             [else (error 'type-check "PAIG: expected boolean condition to if")])]
     ; type-check applications
-    [(AppC f args) (local ([define f (type-check f env)])
+    [(AppC fun args) (local ([define f (type-check fun env)])
                      (cond
-                       [(equal? (length (FunT-args f)) (length args)) (cond
-                                                                        [(equal? #t (fold (lambda ([t1 : Type] [t2 : Type] [res : Boolean])
-                                                                                            (and res (equal? t1 t2))) #t (FunT-args f) args)) (FunT-ret f)]
-                                                                        [else (error 'type-check "PAIG: type mismatch between function parameters and arguments")])]
-                       [else (error 'type-check "PAIG: Incorrect number of arguments to function" f)]
-                       ))]
+                       [(FunT? f) (cond
+                                            [(equal? (length (FunT-args f)) (length args)) (cond
+                                                                                             [(equal? #t (foldl (lambda ([t1 : Type] [t2 : Type] [res : Boolean])
+                                                                                                                 (and res (equal? t1 t2))) #t (FunT-args f) (map (λ ([arg : ExprC]) : Type (type-check arg env)) args))) (FunT-ret f)]
+                                                                                             [else (error 'type-check "PAIG: type mismatch between function parameters and arguments")])]
+                                            [else (error 'type-check "PAIG: Incorrect number of arguments to function ~e" f)])]
+                       [else (error 'type-check "PAIG: Cannot apply a non-function")]))]
+    
     ; type-check BlamC terms
-    [(BlamC args types body) (FunT (map type-check args env) (type-check body
+    [(BlamC args types body) (FunT types (type-check body
                                                     ; extend the type env by combining arg-type bindings and current env 
                                                     (append
                                                      (map (λ ([arg : IdC] [type : Type]) : TBinding
                                                             (TBinding (IdC-s arg) type)) args types)
                                                      env)))]
-    ; type-check var and rec terms
-    )) 
+    ; type-check rec terms
+    [(RecC f name type body) (local ([define new-env (append (list (TBinding (IdC-s name) (FunT (BlamC-types f) type))) env)])
+                               (type-check f new-env)
+                               (type-check body new-env))])) 
 
 
 ; lookup binding in type environment
@@ -366,17 +408,25 @@
 
 
 ; lookup binding in environment
-(define (lookup [s : IdC] [env : Env]) : Value
+(define (lookup [s : IdC] [env : Env]) : (Boxof Value)
   (match env
     ; binding doesn't exist
     ['() (error 'lookup "PAIG: name not found: ~e" (IdC-s s))]
-    [(cons (Binding name val) r) (cond
-                                   [(symbol=? (IdC-s s) name) val]
+    [(cons (Binding name box) r) (cond
+                                   [(symbol=? (IdC-s s) name) box]
                                    [else (lookup s r)])]))
 
 
 
 ; ***** Test Cases *****
+
+(check-equal? (top-interp '{rec [{blam {[n : num]} {{<= n 0} ? 0 else: {+ n {square-helper {- n 2}}}}}
+                                 as square-helper returning num]
+                             :
+                             {with [{blam {[n : num]} {square-helper {- {* 2 n} 1}}}
+                                    as square : {num -> num}]
+                                   :
+                                   {square 12}}}) "144")
 
 ; built-in functions
 
@@ -385,33 +435,27 @@
 (check-equal? (top-interp '{- 1 2}) "-1")
 (check-equal? (top-interp '{<= 1 2}) "true")
 (check-equal? (top-interp '{<= 3 2}) "false")
-(check-equal? (top-interp '{equal? 1 1}) "true")
-(check-equal? (top-interp '{equal? 2 1}) "false")
-(check-equal? (top-interp '{equal? "a" "a"}) "true")
-(check-equal? (top-interp '{equal? "b" "a"}) "false")
-(check-equal? (top-interp '{equal? 1 "1"}) "false")
+(check-equal? (top-interp '{num-eq? 1 1}) "true")
+(check-equal? (top-interp '{num-eq? 2 1}) "false")
+(check-equal? (top-interp '{str-eq? "a" "a"}) "true")
+(check-equal? (top-interp '{str-eq? "b" "a"}) "false")
 
 ; general
-(check-equal? (top-interp '{{blam (x) {+ x 1}} 2}) "3")
-(check-equal? (top-interp '{{blam (x y) {+ x y}} 2 4}) "6")
-(check-equal? (top-interp '{with [{blam (x) {+ x 1}} as f] : {f 2}}) "3")
-(check-equal? (top-interp '{with [{blam (x) {+ x 1}} as f] : {f 2}}) "3")
-(check-equal? (top-interp '{with [{blam (x) {+ x 1}} as f] [{blam (y) 3} as g] : {f {g "string"}}}) "4")
-(check-equal? (top-interp '{with [{blam (x) {equal? x "5"}} as f] : {{f "5"} ? 5 else: 6}}) "5")
-(check-equal? (top-interp '{with [{blam (x) {equal? x "5"}} as f] : {{f "4"} ? 5 else: 6}}) "6")
-(check-equal? (top-interp '{equal? {equal? 1 2} {equal? 2 3}}) "true")
-(check-equal? (top-interp '{equal? {<= 1 2} {<= 4 3}}) "false")
-(check-equal? (top-interp '{blam (x) {+ x 1}}) "#<procedure>")
+(check-equal? (top-interp '{{blam ([x : num]) {+ x 1}} 2}) "3")
+(check-equal? (top-interp '{{blam ([x : num] [y : num]) {+ x y}} 2 4}) "6")
+(check-equal? (top-interp '{with [{blam ([x : num]) {+ x 1}} as f : {num -> num}] : {f 2}}) "3")
+(check-equal? (top-interp '{with [{blam ([x : num]) {+ x 1}} as f : {num -> num}] : {f 2}}) "3")
+(check-equal? (top-interp '{with [{blam ([x : num]) {+ x 1}} as f : {num -> num}] [{blam ([y : str]) 3} as g : {str -> num}] : {f {g "string"}}}) "4")
+(check-equal? (top-interp '{with [{blam ([x : str]) {str-eq? x "5"}} as f : {str -> bool}] : {{f "5"} ? 5 else: 6}}) "5")
+(check-equal? (top-interp '{with [{blam ([x : str]) {str-eq? x "5"}} as f : {str -> bool}] : {{f "4"} ? 5 else: 6}}) "6")
+(check-equal? (top-interp '{blam ([x : num]) {+ x 1}}) "#<procedure>")
 (check-equal? (top-interp '{{<= 1 2} ? "yes" else: "no"}) "\"yes\"")
-(check-equal? (top-interp '{{blam (x) {x 3 4}} +}) "7")
-(check-equal? (top-interp '{{blam (x) x} +}) "#<primop>")
-
-;(check-equal? (parse '((g) 15)) #t)
-(check-equal?
- (top-interp '{{blam (seven) {seven}}
-               {{blam (minus) (blam () {minus (+ 3 10) (* 2 3)})} {blam (x y) {+ x (* -1 y)}}}}) "7")
-(check-equal? (top-interp '{{blam (three) {three}} {{blam (x) {blam () {x 1 2}}} {blam (x y) {+ x y}}}}) "3")
-(check-equal? (top-interp '{{blam () {equal? 2 2}}}) "true")
+(check-equal? (top-interp '{{blam ([x : {num num -> num}]) {x 3 4}} +}) "7")
+(check-equal? (top-interp '{{blam ([x : {num num -> num}]) x} +}) "#<primop>")
+(check-equal? (top-interp '{{blam () {num-eq? 2 2}}}) "true")
+(check-equal? (top-interp '{{blam ([x : num]) 3} 3}) "3")
+(check-equal? (top-interp '{{blam ([three : num]) three} {{blam ([x : num]) x} 3}}) "3")
+(check-equal? (top-interp '{{blam ([three : {-> num}]) {three}} {{blam ([x : {num num -> num}]) {blam () {x 1 2}}} {blam ([x : num] [y : num]) {+ x y}}}}) "3")
 
 ; errors
 (check-exn (regexp (regexp-quote "user-error"))
